@@ -1,0 +1,7 @@
+[package]
+name = "workstate"
+version = "0.1.0"
+edition = "2024"
+description = "Launch your entire work environment with one command 🚀"
+
+[dependencies]
