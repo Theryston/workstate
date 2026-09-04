@@ -15,7 +15,9 @@ pub struct Invocation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Select,
-    Start { environment: EnvironmentArgument },
+    Start {
+        environment: EnvironmentArgument,
+    },
     New {
         environment: Option<EnvironmentArgument>,
     },
@@ -105,6 +107,30 @@ mod tests {
             return;
         };
         assert_eq!(invocation.command, Command::Select);
+    }
+
+    #[test]
+    fn keeps_optional_environment_targets_for_subcommands() {
+        for (arguments, expected) in [
+            (["workstate", "new"], "new"),
+            (["workstate", "edit"], "edit"),
+            (["workstate", "stop"], "stop"),
+            (["workstate", "delete"], "delete"),
+        ] {
+            let invocation = parse_from(arguments);
+            assert!(invocation.is_ok());
+            let Some(invocation) = invocation.ok() else {
+                continue;
+            };
+            let command = match invocation.command {
+                Command::New { environment: None } => "new",
+                Command::Edit { environment: None } => "edit",
+                Command::Stop { environment: None } => "stop",
+                Command::Delete { environment: None } => "delete",
+                _ => "unexpected",
+            };
+            assert_eq!(command, expected);
+        }
     }
 
     #[test]

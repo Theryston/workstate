@@ -74,7 +74,8 @@ async fn dispatch(context: &AppContext, invocation: Invocation) -> Result<()> {
             let Some(argument) = select_or_prompt_new_environment(
                 environment.as_ref(),
                 invocation.options.no_color,
-            )? else {
+            )?
+            else {
                 return Ok(());
             };
             new_environment(
@@ -91,7 +92,8 @@ async fn dispatch(context: &AppContext, invocation: Invocation) -> Result<()> {
                 context,
                 environment.as_ref(),
                 invocation.options.no_color,
-            )? else {
+            )?
+            else {
                 return Ok(());
             };
             edit_environment_command(
@@ -108,7 +110,8 @@ async fn dispatch(context: &AppContext, invocation: Invocation) -> Result<()> {
                 context,
                 environment.as_ref(),
                 invocation.options.no_color,
-            )? else {
+            )?
+            else {
                 return Ok(());
             };
             stop_environment(
@@ -125,7 +128,8 @@ async fn dispatch(context: &AppContext, invocation: Invocation) -> Result<()> {
                 context,
                 environment.as_ref(),
                 invocation.options.no_color,
-            )? else {
+            )?
+            else {
                 return Ok(());
             };
             delete_environment(
@@ -157,12 +161,11 @@ fn select_or_prompt_new_environment(
 ) -> Result<Option<EnvironmentArgument>> {
     match argument {
         Some(argument) => Ok(Some(argument.clone())),
-        None => prompt_text(
-            "Environment name",
-            None,
-            no_color,
-            |value| EnvironmentArgument::new(value.as_str()).map(|_| ()),
-        )?
+        None => prompt_text("Environment name", None, no_color, |value| {
+            EnvironmentConfig::new(value.as_str())
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })?
         .map(EnvironmentArgument::new)
         .transpose()
         .map_err(|error| WorkstateError::new(ErrorCategory::Cli, error)),

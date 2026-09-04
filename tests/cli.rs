@@ -14,9 +14,13 @@ fn public_command_grammar_covers_selection_start_new_edit_stop_and_delete() {
         (vec!["workstate"], "select"),
         (vec!["workstate", "personal-blog"], "start"),
         (vec!["workstate", "new", "personal-blog"], "new"),
+        (vec!["workstate", "new"], "new"),
         (vec!["workstate", "edit", "personal-blog"], "edit"),
+        (vec!["workstate", "edit"], "edit"),
         (vec!["workstate", "stop", "personal-blog"], "stop"),
+        (vec!["workstate", "stop"], "stop"),
         (vec!["workstate", "delete", "personal-blog"], "delete"),
+        (vec!["workstate", "delete"], "delete"),
     ];
 
     for (arguments, expected) in cases {

@@ -54,6 +54,10 @@ impl Theme {
         Style::default().fg(self.brand).add_modifier(Modifier::BOLD)
     }
 
+    pub fn key_style(self) -> Style {
+        Style::default().fg(self.brand).add_modifier(Modifier::BOLD)
+    }
+
     pub fn text_style(self) -> Style {
         Style::default().fg(self.text)
     }

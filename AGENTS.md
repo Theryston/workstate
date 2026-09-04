@@ -244,7 +244,7 @@ The selector is a TUI flow, not a raw numeric shell prompt.
 ### 6.3 New
 
 ```text
-workstate new <environment>
+workstate new [environment]
 ```
 
 `new` creates a new environment. If the environment already exists, it must fail without opening the editor or changing the configuration and show an actionable English error:
@@ -256,23 +256,29 @@ Environment 'personal-blog' already exists. To edit it, use:
 
 The `new` command opens the shared dynamic environment editor for a configuration that does not yet exist. A canceled edit must not partially overwrite any previous configuration. Save only after validation and explicit confirmation in the editor.
 
+When the environment argument is omitted, `new` opens the reusable text field for the environment name. The name is validated and checked for an existing environment before the dynamic editor opens. Canceling the field is a successful no-op.
+
 The `new` command must not require the current working directory to be the project directory. Every project path and command working directory is configured explicitly by the user and persisted in the environment file.
 
 ### 6.4 Edit
 
 ```text
-workstate edit <environment>
+workstate edit [environment]
 ```
 
 `edit` edits an existing environment through exactly the same dynamic TUI, fields, validation, save confirmation, and terminal lifecycle used by `new`. If the environment does not exist, it must fail before opening the editor and show an actionable English error pointing to `workstate new <environment>`.
+
+When the environment argument is omitted, `edit` opens the reusable environment selector. `Up` and `Down` move through saved environments and `Enter` selects one. The selected environment is then validated before the shared editor opens. `Esc` cancels without changing anything.
 
 The `edit` command must not require the current working directory to be the project directory. Every project path and command working directory is loaded from and saved to the environment file.
 
 ### 6.5 Stop
 
 ```text
-workstate stop <environment>
+workstate stop [environment]
 ```
+
+When the environment argument is omitted, `stop` opens the same reusable environment selector used by `edit` and `delete`. The lifecycle operation starts only after the user selects an existing environment with `Up`, `Down`, and `Enter`.
 
 `stop` must:
 
@@ -295,8 +301,10 @@ Stopping an already stopped or partially cleaned environment should be idempoten
 ### 6.6 Delete
 
 ```text
-workstate delete <environment>
+workstate delete [environment]
 ```
+
+When the environment argument is omitted, `delete` opens the same reusable environment selector used by `edit` and `stop`. The delete confirmation is shown only after the user selects an environment. `Esc` cancels the selection without stopping or deleting anything.
 
 `delete` must:
 
@@ -1230,7 +1238,7 @@ Use `ratatui` for the primary full-screen terminal interface. Use `dialoguer` fo
 
 ### 18.2 Dynamic environment editor
 
-`workstate new <environment>` creates a new environment and `workstate edit <environment>` edits an existing one. Both commands must use the same dynamic builder, not a rigid list of technology-specific questions.
+`workstate new [environment]` creates a new environment and `workstate edit [environment]` edits an existing one. When their environment argument is omitted, `new` uses the shared validated text field and `edit` uses the shared saved-environment selector before either command opens the dynamic builder. Both commands must use the same dynamic builder, not a rigid list of technology-specific questions.
 
 The editor uses a focused two-pane layout:
 
@@ -1257,6 +1265,8 @@ The editor has two primary focus states:
 - `Inspector`: `Up` and `Down` move between fields generated for the selected action. `Enter` edits the selected field. `Esc` or `Left` returns to the action list without leaving the editor.
 
 `Tab` may switch between the two panes as an accessibility and efficiency shortcut, but it must not replace the documented `Enter` and `Esc` flow. The footer always shows a compact, context-sensitive control legend. With the action list focused, it describes action selection, inspector entry, adding, deletion when an action is selected, saving, and exit. With the inspector focused, it describes field selection, field editing, returning to the action list, adding, deletion when an action is selected, saving, and exit. Modal editors replace the legend with their own navigation, confirmation, and cancellation controls. The legend must not grow a list of action-specific hotkeys.
+
+The primary legend shows one canonical shortcut for each operation. In the action list, use `↑↓ Move`, `→ Inspect`, `a Add`, `d Delete`, `s Save`, and `q Exit`, omitting `→` and `d` when no action is selected. In the inspector, use `↑↓ Move`, `← Back`, `Enter Edit`, `a Add`, `d Delete`, `s Save`, and `q Exit`, omitting field navigation and deletion when no action is selected. Keep alternate bindings such as `Tab`, `Enter` from the action list, `Ctrl+S`, and `Esc` functional, but do not repeat them in the primary legend. Render key tokens with a stronger, distinct key style and render operation labels with the muted label style.
 
 Saving is available through `s` and `Ctrl+S`. Saving still validates the full configuration and requires the normal explicit confirmation before persistence. A failed validation keeps the editor open and displays the error in English. A canceled save or editor exit must preserve the previously persisted configuration byte-for-byte.
 

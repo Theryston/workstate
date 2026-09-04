@@ -58,13 +58,15 @@ The top-level parser must support:
 ~~~
 workstate
 workstate <environment>
-workstate new <environment>
-workstate edit <environment>
-workstate stop <environment>
-workstate delete <environment>
+workstate new [environment]
+workstate edit [environment]
+workstate stop [environment]
+workstate delete [environment]
 ~~~
 
 Reserve known subcommand names so a name such as new is not interpreted as an environment. Preserve the positional environment invocation as the primary start operation. Do not add a public start command in this task.
+
+When `edit`, `stop`, or `delete` omit the environment argument, resolve it through the shared saved-environment selector. When `new` omits the argument, resolve it through the shared validated text field. Resolve and validate the target before opening the editor or beginning the requested lifecycle operation.
 
 Support the agreed global flags when they are implemented:
 
@@ -132,6 +134,7 @@ The editor must support both creation and editing:
 - identify action-related validation errors with the action's current display name;
 - revalidate a displayed invalid field after it changes and remove its error immediately when fixed;
 - show a context-sensitive footer legend for the focused action list, inspector, and modal editors;
+- show one canonical shortcut per operation, with visually distinct key tokens and operation labels;
 - show a review and save screen.
 
 The user must be able to add actions in any order and attach dependencies after creating them. Do not implement a fixed sequence of technology-specific questions.
@@ -276,6 +279,8 @@ Add:
 - selector tests with zero, one, and many environments;
 - new-create tests;
 - edit tests;
+- omitted-environment selector tests for edit, stop, and delete;
+- omitted-environment text-field tests for new;
 - cancel-preserves-file tests;
 - path input tests;
 - workspace target form tests;
@@ -292,8 +297,9 @@ All tests must use fake application services and temporary storage.
 - The documented command grammar parses correctly.
 - workstate without arguments opens a selector.
 - workstate <environment> runs the selected environment use case.
-- workstate new <environment> creates only through the shared dynamic editor.
-- workstate edit <environment> edits only through the same shared dynamic editor.
+- workstate new [environment] creates only through the shared dynamic editor, using the reusable name field when the argument is omitted.
+- workstate edit [environment] edits only through the same shared dynamic editor, using the reusable environment selector when the argument is omitted.
+- workstate stop [environment] and workstate delete [environment] use the same reusable environment selector when the argument is omitted.
 - Every project and command can receive an explicit working directory.
 - Every visual action can receive a desktop workspace target.
 - Workspace tiling is configured as a boolean desired state.

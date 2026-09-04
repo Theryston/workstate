@@ -371,13 +371,14 @@ fn render_inspector(frame: &mut Frame<'_>, state: &EditorState, theme: Theme, ar
 }
 
 fn editor_footer_height(state: &EditorState) -> u16 {
+    let controls_height = 2;
     if state.validation_errors.is_empty() {
-        return if state.notice.is_some() { 2 } else { 1 };
+        return controls_height + u16::from(state.notice.is_some());
     }
 
     let displayed_errors = state.validation_errors.len().min(5) as u16;
     let overflow_line = u16::from(state.validation_errors.len() > 5);
-    2 + displayed_errors + overflow_line
+    controls_height + 1 + displayed_errors + overflow_line
 }
 
 fn render_editor_footer(frame: &mut Frame<'_>, state: &EditorState, theme: Theme, area: Rect) {
@@ -406,10 +407,7 @@ fn render_editor_footer(frame: &mut Frame<'_>, state: &EditorState, theme: Theme
             theme.warning_style(),
         )));
     }
-    lines.push(Line::from(Span::styled(
-        editor_controls(state),
-        theme.muted_style(),
-    )));
+    lines.push(render_editor_controls(state, theme));
 
     let footer = Paragraph::new(Text::from(lines)).block(
         Block::default()
@@ -419,39 +417,213 @@ fn render_editor_footer(frame: &mut Frame<'_>, state: &EditorState, theme: Theme
     frame.render_widget(footer, area);
 }
 
-fn editor_controls(state: &EditorState) -> &'static str {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EditorControl {
+    key: &'static str,
+    label: &'static str,
+}
+
+fn render_editor_controls(state: &EditorState, theme: Theme) -> Line<'static> {
+    let controls = editor_controls(state);
+    let mut spans = Vec::with_capacity(controls.len() * 3);
+    for (index, control) in controls.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(control.key, theme.key_style()));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(control.label, theme.muted_style()));
+    }
+    Line::from(spans)
+}
+
+fn editor_controls(state: &EditorState) -> Vec<EditorControl> {
     if state.input.is_some() {
-        return "Type value  Enter apply  Esc cancel";
+        return vec![
+            EditorControl {
+                key: "Enter",
+                label: "Apply",
+            },
+            EditorControl {
+                key: "Esc",
+                label: "Cancel",
+            },
+        ];
     }
     if state.palette_open {
-        return "↑↓ select action  Enter add  Esc cancel";
+        return vec![
+            EditorControl {
+                key: "↑↓",
+                label: "Move",
+            },
+            EditorControl {
+                key: "Enter",
+                label: "Add",
+            },
+            EditorControl {
+                key: "Esc",
+                label: "Cancel",
+            },
+        ];
     }
     if state.delete_confirmation {
-        return "y confirm  n/Esc cancel";
+        return vec![
+            EditorControl {
+                key: "y",
+                label: "Confirm",
+            },
+            EditorControl {
+                key: "Esc",
+                label: "Cancel",
+            },
+        ];
     }
     if state.workspace_picker_open {
-        return "↑↓ navigate  Enter select  Esc cancel";
+        return vec![
+            EditorControl {
+                key: "↑↓",
+                label: "Navigate",
+            },
+            EditorControl {
+                key: "Enter",
+                label: "Select",
+            },
+            EditorControl {
+                key: "Esc",
+                label: "Cancel",
+            },
+        ];
     }
     if let Some(picker) = &state.inspector_picker {
         return match picker {
-            InspectorPicker::Choices { .. } => "↑↓ navigate  Enter select  Esc cancel",
-            InspectorPicker::Dependencies { .. } => {
-                "↑↓ navigate  Space toggle  Enter confirm  Esc cancel"
-            }
+            InspectorPicker::Choices { .. } => vec![
+                EditorControl {
+                    key: "↑↓",
+                    label: "Navigate",
+                },
+                EditorControl {
+                    key: "Enter",
+                    label: "Select",
+                },
+                EditorControl {
+                    key: "Esc",
+                    label: "Cancel",
+                },
+            ],
+            InspectorPicker::Dependencies { .. } => vec![
+                EditorControl {
+                    key: "↑↓",
+                    label: "Navigate",
+                },
+                EditorControl {
+                    key: "Space",
+                    label: "Toggle",
+                },
+                EditorControl {
+                    key: "Enter",
+                    label: "Confirm",
+                },
+                EditorControl {
+                    key: "Esc",
+                    label: "Cancel",
+                },
+            ],
         };
     }
 
     match (state.panel, state.selected_action.is_some()) {
-        (EditorPanel::Actions, true) => {
-            "↑↓ select action  →/Enter inspect  Tab inspector  a add  d delete  s/Ctrl+S save  Esc/q exit"
-        }
-        (EditorPanel::Actions, false) => {
-            "↑↓ navigate  Tab inspector  a add  s/Ctrl+S save  Esc/q exit"
-        }
-        (EditorPanel::Inspector, true) => {
-            "↑↓ select field  Enter edit  ←/Esc actions  Tab actions  a add  d delete  s/Ctrl+S save  q exit"
-        }
-        (EditorPanel::Inspector, false) => "Tab actions  a add  s/Ctrl+S save  ←/Esc back  q exit",
+        (EditorPanel::Actions, true) => vec![
+            EditorControl {
+                key: "↑↓",
+                label: "Move",
+            },
+            EditorControl {
+                key: "→",
+                label: "Inspect",
+            },
+            EditorControl {
+                key: "a",
+                label: "Add",
+            },
+            EditorControl {
+                key: "d",
+                label: "Delete",
+            },
+            EditorControl {
+                key: "s",
+                label: "Save",
+            },
+            EditorControl {
+                key: "q",
+                label: "Exit",
+            },
+        ],
+        (EditorPanel::Actions, false) => vec![
+            EditorControl {
+                key: "↑↓",
+                label: "Navigate",
+            },
+            EditorControl {
+                key: "a",
+                label: "Add",
+            },
+            EditorControl {
+                key: "s",
+                label: "Save",
+            },
+            EditorControl {
+                key: "q",
+                label: "Exit",
+            },
+        ],
+        (EditorPanel::Inspector, true) => vec![
+            EditorControl {
+                key: "↑↓",
+                label: "Move",
+            },
+            EditorControl {
+                key: "←",
+                label: "Back",
+            },
+            EditorControl {
+                key: "Enter",
+                label: "Edit",
+            },
+            EditorControl {
+                key: "a",
+                label: "Add",
+            },
+            EditorControl {
+                key: "d",
+                label: "Delete",
+            },
+            EditorControl {
+                key: "s",
+                label: "Save",
+            },
+            EditorControl {
+                key: "q",
+                label: "Exit",
+            },
+        ],
+        (EditorPanel::Inspector, false) => vec![
+            EditorControl {
+                key: "←",
+                label: "Back",
+            },
+            EditorControl {
+                key: "a",
+                label: "Add",
+            },
+            EditorControl {
+                key: "s",
+                label: "Save",
+            },
+            EditorControl {
+                key: "q",
+                label: "Exit",
+            },
+        ],
     }
 }
 
@@ -668,14 +840,21 @@ mod tests {
     };
 
     use super::{
-        Theme, editor_controls, render_delete_confirmation, render_editor, render_inspector,
-        render_progress, render_selector,
+        Theme, editor_controls, render_delete_confirmation, render_editor, render_editor_controls,
+        render_inspector, render_progress, render_selector,
     };
     use crate::ui::{
         ActionProgressStatus, EnvironmentListItem, EnvironmentStatus, ProgressEvent, ProgressState,
         SelectorState,
     };
     use crate::ui::{EditorMode, EditorState};
+
+    fn control_pairs(state: &EditorState) -> Vec<(&'static str, &'static str)> {
+        editor_controls(state)
+            .into_iter()
+            .map(|control| (control.key, control.label))
+            .collect()
+    }
 
     #[test]
     fn editor_footer_controls_follow_the_active_panel_and_selection() {
@@ -684,8 +863,13 @@ mod tests {
         };
         let empty_state = EditorState::new(configuration, EditorMode::Create);
         assert_eq!(
-            editor_controls(&empty_state),
-            "↑↓ navigate  Tab inspector  a add  s/Ctrl+S save  Esc/q exit"
+            control_pairs(&empty_state),
+            vec![
+                ("↑↓", "Navigate"),
+                ("a", "Add"),
+                ("s", "Save"),
+                ("q", "Exit")
+            ]
         );
 
         let Some(mut configuration) = EnvironmentConfig::new("Blog").ok() else {
@@ -697,15 +881,66 @@ mod tests {
         assert!(configuration.add_action(action).is_ok());
         let mut state = EditorState::new(configuration, EditorMode::Create);
         assert_eq!(
-            editor_controls(&state),
-            "↑↓ select action  →/Enter inspect  Tab inspector  a add  d delete  s/Ctrl+S save  Esc/q exit"
+            control_pairs(&state),
+            vec![
+                ("↑↓", "Move"),
+                ("→", "Inspect"),
+                ("a", "Add"),
+                ("d", "Delete"),
+                ("s", "Save"),
+                ("q", "Exit"),
+            ]
         );
 
         state.panel = crate::ui::EditorPanel::Inspector;
         assert_eq!(
-            editor_controls(&state),
-            "↑↓ select field  Enter edit  ←/Esc actions  Tab actions  a add  d delete  s/Ctrl+S save  q exit"
+            control_pairs(&state),
+            vec![
+                ("↑↓", "Move"),
+                ("←", "Back"),
+                ("Enter", "Edit"),
+                ("a", "Add"),
+                ("d", "Delete"),
+                ("s", "Save"),
+                ("q", "Exit"),
+            ]
         );
+    }
+
+    #[test]
+    fn editor_footer_keys_use_a_distinct_style_from_labels() {
+        let Some(configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let state = EditorState::new(configuration, EditorMode::Create);
+        let line = render_editor_controls(&state, Theme::new(true));
+        assert!(line.spans.len() >= 3);
+        assert_ne!(line.spans[0].style, line.spans[2].style);
+    }
+
+    #[test]
+    fn editor_footer_controls_are_visible_without_messages() {
+        let Some(configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let state = EditorState::new(configuration, EditorMode::Create);
+        let backend = TestBackend::new(120, 10);
+        let Ok(mut terminal) = Terminal::new(backend) else {
+            return;
+        };
+        let result = terminal.draw(|frame| render_editor(frame, &state, Theme::new(false)));
+        assert!(result.is_ok());
+        let Some(completed) = result.ok() else {
+            return;
+        };
+        let rendered = completed
+            .buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("s Save"));
+        assert!(rendered.contains("a Add"));
     }
 
     #[test]
@@ -793,6 +1028,7 @@ mod tests {
             .collect::<String>();
         assert!(rendered.contains("Personal Blog"));
         assert!(rendered.contains("Validation errors"));
+        assert!(rendered.contains("s Save"));
         assert!(rendered.contains("Open Project with Zed"));
         assert!(rendered.contains("Project path"));
         assert!(rendered.contains("Desktop workspace"));

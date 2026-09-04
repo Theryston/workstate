@@ -1,4 +1,7 @@
-use dialoguer::{Input, theme::{ColorfulTheme, SimpleTheme, Theme as DialoguerTheme}};
+use dialoguer::{
+    Input,
+    theme::{ColorfulTheme, SimpleTheme, Theme as DialoguerTheme},
+};
 
 use crate::error::{ErrorCategory, Result, WorkstateError};
 
