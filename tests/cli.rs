@@ -9,11 +9,12 @@ use workstate::cli::{
 use workstate::error::{ErrorCategory, WorkstateError};
 
 #[test]
-fn public_command_grammar_covers_selection_start_add_stop_and_delete() {
+fn public_command_grammar_covers_selection_start_new_edit_stop_and_delete() {
     let cases = [
         (vec!["workstate"], "select"),
         (vec!["workstate", "personal-blog"], "start"),
-        (vec!["workstate", "add", "personal-blog"], "add"),
+        (vec!["workstate", "new", "personal-blog"], "new"),
+        (vec!["workstate", "edit", "personal-blog"], "edit"),
         (vec!["workstate", "stop", "personal-blog"], "stop"),
         (vec!["workstate", "delete", "personal-blog"], "delete"),
     ];
@@ -27,7 +28,8 @@ fn public_command_grammar_covers_selection_start_add_stop_and_delete() {
         let actual = match invocation.command {
             Command::Select => "select",
             Command::Start { .. } => "start",
-            Command::Add { .. } => "add",
+            Command::New { .. } => "new",
+            Command::Edit { .. } => "edit",
             Command::Stop { .. } => "stop",
             Command::Delete { .. } => "delete",
         };
@@ -37,14 +39,24 @@ fn public_command_grammar_covers_selection_start_add_stop_and_delete() {
 
 #[test]
 fn subcommand_names_are_reserved_and_environment_names_are_validated() {
-    let parsed = Cli::try_parse_from(["workstate", "add", "personal-blog"]);
+    let parsed = Cli::try_parse_from(["workstate", "new", "personal-blog"]);
     assert!(parsed.is_ok());
     let Some(parsed) = parsed.ok() else {
         return;
     };
-    assert!(matches!(parsed.subcommand, Some(CliSubcommand::Add { .. })));
+    assert!(matches!(parsed.subcommand, Some(CliSubcommand::New { .. })));
+    let parsed = Cli::try_parse_from(["workstate", "edit", "personal-blog"]);
+    assert!(parsed.is_ok());
+    let Some(parsed) = parsed.ok() else {
+        return;
+    };
+    assert!(matches!(
+        parsed.subcommand,
+        Some(CliSubcommand::Edit { .. })
+    ));
+    assert!(Cli::try_parse_from(["workstate", "add", "personal-blog"]).is_err());
     assert!(Cli::try_parse_from(["workstate", "../outside"]).is_err());
-    assert!(Cli::try_parse_from(["workstate", "add", "../outside"]).is_err());
+    assert!(Cli::try_parse_from(["workstate", "new", "../outside"]).is_err());
 }
 
 #[test]

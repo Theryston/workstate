@@ -132,7 +132,7 @@ impl SelectorState {
 }
 
 pub const SELECTOR_EMPTY_MESSAGE: &str =
-    "No environments yet. Create one with: workstate add <environment>";
+    "No environments yet. Create one with: workstate new <environment>";
 
 #[cfg(test)]
 mod tests {
@@ -159,7 +159,7 @@ mod tests {
         assert!(state.empty());
         assert_eq!(state.selected_slug(), None);
         assert_eq!(state.handle_key(KeyCode::Enter), SelectorAction::None);
-        assert!(SELECTOR_EMPTY_MESSAGE.contains("workstate add"));
+        assert!(SELECTOR_EMPTY_MESSAGE.contains("workstate new"));
     }
 
     #[test]

@@ -12,7 +12,7 @@ use crate::{
     infrastructure::persistence::WorkstatePaths,
     ui::{
         EditorMode, EditorOutcome, EditorState, EnvironmentListItem, EnvironmentStatus,
-        SelectorState, confirm_delete, edit_environment, select_environment,
+        SelectorState, confirm_delete, edit_environment as run_editor, select_environment,
     },
 };
 
@@ -68,8 +68,18 @@ async fn dispatch(context: &AppContext, invocation: Invocation) -> Result<()> {
             let slug = resolve_environment_slug(environment.as_str())?;
             run_environment(context, &slug, &invocation.options, &policy, &mut output).await
         }
-        Command::Add { environment } => {
-            add_environment(
+        Command::New { environment } => {
+            new_environment(
+                context,
+                environment.as_str(),
+                &invocation.options,
+                &policy,
+                &mut output,
+            )
+            .await
+        }
+        Command::Edit { environment } => {
+            edit_environment_command(
                 context,
                 environment.as_str(),
                 &invocation.options,
@@ -160,30 +170,72 @@ async fn run_environment(
     policy.write_message(output, &message)
 }
 
-async fn add_environment(
+async fn new_environment(
     context: &AppContext,
     argument: &str,
     options: &args::GlobalOptions,
     policy: &OutputPolicy,
     output: &mut dyn OutputSink,
 ) -> Result<()> {
+    let slug = resolve_environment_slug(argument)?;
+    if context.config_store().load(&slug)?.is_some() {
+        return Err(environment_already_exists(argument));
+    }
+
     if options.dry_run {
-        let slug = resolve_environment_slug(argument)?;
         return policy.write_message(
             output,
-            &format!("Dry run: the editor would create or edit '{slug}'."),
+            &format!("Dry run: the editor would create '{slug}'."),
         );
     }
 
+    let configuration = EnvironmentConfig::new(argument).map_err(WorkstateError::from)?;
+    open_environment_editor(
+        context,
+        configuration,
+        EditorMode::Create,
+        options,
+        policy,
+        output,
+    )
+    .await
+}
+
+async fn edit_environment_command(
+    context: &AppContext,
+    argument: &str,
+    options: &args::GlobalOptions,
+    policy: &OutputPolicy,
+    output: &mut dyn OutputSink,
+) -> Result<()> {
     let slug = resolve_environment_slug(argument)?;
-    let existing = context.config_store().load(&slug)?;
-    let (configuration, mode) = match existing {
-        Some(configuration) => (configuration, EditorMode::Edit),
-        None => (
-            EnvironmentConfig::new(argument).map_err(WorkstateError::from)?,
-            EditorMode::Create,
-        ),
+    let Some(configuration) = context.config_store().load(&slug)? else {
+        return Err(environment_not_found(argument));
     };
+
+    if options.dry_run {
+        return policy.write_message(output, &format!("Dry run: the editor would edit '{slug}'."));
+    }
+
+    open_environment_editor(
+        context,
+        configuration,
+        EditorMode::Edit,
+        options,
+        policy,
+        output,
+    )
+    .await
+}
+
+async fn open_environment_editor(
+    context: &AppContext,
+    configuration: EnvironmentConfig,
+    mode: EditorMode,
+    options: &args::GlobalOptions,
+    policy: &OutputPolicy,
+    output: &mut dyn OutputSink,
+) -> Result<()> {
     let editor = match context.desktop_backend().snapshot().await {
         Ok(snapshot) => {
             EditorState::new(configuration, mode).with_live_workspaces(snapshot.workspaces)
@@ -192,7 +244,7 @@ async fn add_environment(
             EditorState::new(configuration, mode).with_workspace_observation_error(error.render())
         }
     };
-    match edit_environment(editor, options.no_color)? {
+    match run_editor(editor, options.no_color)? {
         EditorOutcome::Cancelled => Ok(()),
         EditorOutcome::Saved(configuration) => {
             match mode {
@@ -305,5 +357,14 @@ fn environment_not_found(argument: &str) -> WorkstateError {
         ErrorCategory::Persistence,
         format!("environment '{argument}' was not found"),
     )
-    .with_context("suggested_command", format!("workstate add {argument}"))
+    .with_context("suggested_command", format!("workstate new {argument}"))
+}
+
+fn environment_already_exists(argument: &str) -> WorkstateError {
+    WorkstateError::new(
+        ErrorCategory::Persistence,
+        format!(
+            "environment '{argument}' already exists. To edit it, use:\n  workstate edit {argument}"
+        ),
+    )
 }

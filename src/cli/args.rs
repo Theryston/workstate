@@ -42,8 +42,13 @@ pub struct GlobalOptions {
 
 #[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
 pub enum CliSubcommand {
-    #[command(about = "Create or edit an environment")]
-    Add {
+    #[command(about = "Create a new environment")]
+    New {
+        #[arg(value_name = "ENVIRONMENT")]
+        environment: EnvironmentArgument,
+    },
+    #[command(about = "Edit an environment")]
+    Edit {
         #[arg(value_name = "ENVIRONMENT")]
         environment: EnvironmentArgument,
     },
@@ -122,7 +127,7 @@ mod tests {
 
     #[test]
     fn reserves_known_subcommands_before_the_positional_environment() {
-        let parsed = Cli::try_parse_from(["workstate", "add", "personal-blog"]);
+        let parsed = Cli::try_parse_from(["workstate", "new", "personal-blog"]);
         assert!(parsed.is_ok());
         let Some(parsed) = parsed.ok() else {
             return;
@@ -134,7 +139,7 @@ mod tests {
         };
         assert_eq!(
             parsed.subcommand,
-            Some(CliSubcommand::Add {
+            Some(CliSubcommand::New {
                 environment: expected_environment,
             })
         );
@@ -144,9 +149,11 @@ mod tests {
     #[test]
     fn parses_each_public_subcommand_and_positional_start() {
         assert!(Cli::try_parse_from(["workstate", "my-app"]).is_ok());
+        assert!(Cli::try_parse_from(["workstate", "new", "my-app"]).is_ok());
+        assert!(Cli::try_parse_from(["workstate", "edit", "my-app"]).is_ok());
         assert!(Cli::try_parse_from(["workstate", "stop", "my-app"]).is_ok());
         assert!(Cli::try_parse_from(["workstate", "delete", "my-app"]).is_ok());
-        assert!(Cli::try_parse_from(["workstate", "--yes", "add", "my-app"]).is_ok());
+        assert!(Cli::try_parse_from(["workstate", "--yes", "edit", "my-app"]).is_ok());
     }
 
     #[test]
@@ -183,6 +190,6 @@ mod tests {
     #[test]
     fn rejects_invalid_environment_arguments() {
         assert!(Cli::try_parse_from(["workstate", "../outside"]).is_err());
-        assert!(Cli::try_parse_from(["workstate", "add", "../outside"]).is_err());
+        assert!(Cli::try_parse_from(["workstate", "new", "../outside"]).is_err());
     }
 }

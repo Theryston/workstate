@@ -24,5 +24,5 @@ pub(crate) fn environment_not_found(argument: &str) -> WorkstateError {
         ErrorCategory::Persistence,
         format!("environment '{argument}' was not found"),
     )
-    .with_context("suggested_command", format!("workstate add {argument}"))
+    .with_context("suggested_command", format!("workstate new {argument}"))
 }

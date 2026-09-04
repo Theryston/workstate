@@ -26,7 +26,7 @@ Task 02 supplies the persisted emulator configuration and Task 04 supplies the i
 
 - Detecting the Android SDK emulator and adb capabilities.
 - Selecting an AVD during environment configuration.
-- Listing available AVDs during the add flow.
+- Listing available AVDs during the new flow.
 - Starting a selected AVD when necessary.
 - Detecting an already-running matching emulator.
 - Waiting for the emulator and Android boot process.
@@ -85,7 +85,7 @@ The Android adapter owns emulator and adb command details. It must use the gener
 
 ### 2. Implement configuration-time selection
 
-1. During the add editor, query the Android capability only after platform compatibility has been accepted.
+1. During the new editor, query the Android capability only after platform compatibility has been accepted.
 2. List AVD names in a dialoguer selector with a clear refresh or retry path.
 3. Store the selected AVD name in environment TOML, not the caller's current device serial.
 4. Let the user choose the workspace target and per-workspace tiling preference independently from the emulator selection.
@@ -166,7 +166,7 @@ Add unit and integration tests with fake Android, process, and desktop ports:
 
 ## Acceptance criteria
 
-- The add flow can select and persist an AVD without relying on PWD.
+- The new flow can select and persist an AVD without relying on PWD.
 - Starting an environment launches or reuses the correct emulator and waits for actual boot readiness.
 - The emulator remains running after the Workstate controller exits.
 - Dependent actions do not start before emulator readiness.

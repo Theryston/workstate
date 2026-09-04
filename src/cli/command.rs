@@ -16,7 +16,8 @@ pub struct Invocation {
 pub enum Command {
     Select,
     Start { environment: EnvironmentArgument },
-    Add { environment: EnvironmentArgument },
+    New { environment: EnvironmentArgument },
+    Edit { environment: EnvironmentArgument },
     Stop { environment: EnvironmentArgument },
     Delete { environment: EnvironmentArgument },
 }
@@ -53,7 +54,8 @@ impl TryFrom<Cli> for Invocation {
         let command = match (cli.subcommand, cli.environment) {
             (None, None) => Command::Select,
             (None, Some(environment)) => Command::Start { environment },
-            (Some(CliSubcommand::Add { environment }), None) => Command::Add { environment },
+            (Some(CliSubcommand::New { environment }), None) => Command::New { environment },
+            (Some(CliSubcommand::Edit { environment }), None) => Command::Edit { environment },
             (Some(CliSubcommand::Stop { environment }), None) => Command::Stop { environment },
             (Some(CliSubcommand::Delete { environment }), None) => Command::Delete { environment },
             (Some(_), Some(_)) => {

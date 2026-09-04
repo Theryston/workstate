@@ -11,7 +11,7 @@ This task implements:
 - Clap command parsing;
 - positional environment execution;
 - the no-argument environment selector;
-- add-create and add-edit behavior;
+- new-create and edit behavior;
 - the dynamic environment editor;
 - workspace target configuration;
 - action configuration;
@@ -58,12 +58,13 @@ The top-level parser must support:
 ~~~
 workstate
 workstate <environment>
-workstate add <environment>
+workstate new <environment>
+workstate edit <environment>
 workstate stop <environment>
 workstate delete <environment>
 ~~~
 
-Reserve known subcommand names so a name such as add is not interpreted as an environment. Preserve the positional environment invocation as the primary start operation. Do not add a public start command in this task.
+Reserve known subcommand names so a name such as new is not interpreted as an environment. Preserve the positional environment invocation as the primary start operation. Do not add a public start command in this task.
 
 Support the agreed global flags when they are implemented:
 
@@ -109,13 +110,13 @@ The no-argument command must display saved environments with:
 - current state such as ready, partial, stopped, or unknown;
 - selection highlight;
 - keyboard navigation;
-- an empty-state message that points to workstate add <environment>.
+- an empty-state message that points to workstate new <environment>.
 
 Selecting an environment must invoke the same application execution use case as workstate <environment>.
 
 Do not make the selector depend on a numeric prompt. A numeric index may be shown as secondary information, but keyboard navigation is the primary interaction.
 
-### 5. Build the dynamic add editor
+### 5. Build the shared new/edit editor
 
 The editor must support both creation and editing:
 
@@ -269,8 +270,8 @@ Add:
 - Clap parsing tests for every public command;
 - tests for positional environment disambiguation;
 - selector tests with zero, one, and many environments;
-- add-create tests;
-- add-edit tests;
+- new-create tests;
+- edit tests;
 - cancel-preserves-file tests;
 - path input tests;
 - workspace target form tests;
@@ -287,7 +288,8 @@ All tests must use fake application services and temporary storage.
 - The documented command grammar parses correctly.
 - workstate without arguments opens a selector.
 - workstate <environment> runs the selected environment use case.
-- workstate add <environment> creates or edits through the same dynamic editor.
+- workstate new <environment> creates only through the shared dynamic editor.
+- workstate edit <environment> edits only through the same shared dynamic editor.
 - Every project and command can receive an explicit working directory.
 - Every visual action can receive a desktop workspace target.
 - Workspace tiling is configured as a boolean desired state.

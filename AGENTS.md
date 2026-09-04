@@ -222,7 +222,7 @@ If the environment does not exist, exit with code `1` and show an actionable mes
 Environment 'personal-blog' was not found.
 
 Create it with:
-  workstate add personal-blog
+  workstate new personal-blog
 ```
 
 If the environment is already fully correct, do not restart resources. Show a success state such as:
@@ -237,26 +237,38 @@ Environment 'personal-blog' is already in the desired state.
 workstate
 ```
 
-With no arguments, show an interactive selector listing saved environments and their current status. The selector must not assume that there is exactly one environment. If no saved environment exists, show an actionable English message pointing to `workstate add <environment>`.
+With no arguments, show an interactive selector listing saved environments and their current status. The selector must not assume that there is exactly one environment. If no saved environment exists, show an actionable English message pointing to `workstate new <environment>`.
 
 The selector is a TUI flow, not a raw numeric shell prompt.
 
-### 6.3 Add and edit
+### 6.3 New
 
 ```text
-workstate add <environment>
+workstate new <environment>
 ```
 
-`add` has two MVP behaviors:
+`new` creates a new environment. If the environment already exists, it must fail without opening the editor or changing the configuration and show an actionable English error:
 
-- if the environment does not exist, create it;
-- if the environment already exists, open it for editing.
+```text
+Environment 'personal-blog' already exists. To edit it, use:
+  workstate edit personal-blog
+```
 
-The same dynamic TUI is used for both cases. A canceled edit must not partially overwrite the previous configuration. Save only after validation and explicit confirmation in the editor.
+The `new` command opens the shared dynamic environment editor for a configuration that does not yet exist. A canceled edit must not partially overwrite any previous configuration. Save only after validation and explicit confirmation in the editor.
 
-The `add` command must not require the current working directory to be the project directory. Every project path and command working directory is configured explicitly by the user and persisted in the environment file.
+The `new` command must not require the current working directory to be the project directory. Every project path and command working directory is configured explicitly by the user and persisted in the environment file.
 
-### 6.4 Stop
+### 6.4 Edit
+
+```text
+workstate edit <environment>
+```
+
+`edit` edits an existing environment through exactly the same dynamic TUI, fields, validation, save confirmation, and terminal lifecycle used by `new`. If the environment does not exist, it must fail before opening the editor and show an actionable English error pointing to `workstate new <environment>`.
+
+The `edit` command must not require the current working directory to be the project directory. Every project path and command working directory is loaded from and saved to the environment file.
+
+### 6.5 Stop
 
 ```text
 workstate stop <environment>
@@ -280,7 +292,7 @@ workstate stop <environment>
 
 Stopping an already stopped or partially cleaned environment should be idempotent and should not fail merely because a resource is already gone.
 
-### 6.5 Delete
+### 6.6 Delete
 
 ```text
 workstate delete <environment>
@@ -299,11 +311,11 @@ workstate delete <environment>
 
 Cancellation is a successful no-op and must not delete anything.
 
-### 6.6 Future commands
+### 6.7 Future commands
 
 Future commands may include status, inspect, doctor, completion, import, export, or a dedicated run command. They must be added as explicit Clap subcommands and documented before implementation. Do not change the meaning of the existing positional environment invocation.
 
-### 6.7 Global flags
+### 6.8 Global flags
 
 The command model should reserve these flags for the MVP or an immediately compatible future implementation:
 
@@ -319,7 +331,7 @@ The command model should reserve these flags for the MVP or an immediately compa
 
 Flags must have consistent behavior across commands. `--yes` bypasses only confirmations; it must not bypass compatibility checks, validation, ownership safety, or rollback.
 
-### 6.8 Exit codes
+### 6.9 Exit codes
 
 Use stable exit semantics:
 
@@ -361,7 +373,7 @@ Currently supported:
   Linux + Pop!_OS + COSMIC + tmux
 ```
 
-`add`, edit, stop, and delete are also blocked on unsupported systems. Configuration management must not become a way to bypass compatibility policy in the MVP.
+`new`, `edit`, stop, and delete are also blocked on unsupported systems. Configuration management must not become a way to bypass compatibility policy in the MVP.
 
 ### 7.2 Detection architecture
 
@@ -1002,7 +1014,7 @@ src/
 │   │   └── ownership.rs
 │   └── use_cases/
 │       ├── mod.rs
-│       ├── add.rs
+│       ├── new.rs
 │       ├── run.rs
 │       ├── stop.rs
 │       └── delete.rs
@@ -1112,7 +1124,7 @@ The domain must not know about the filesystem, processes, Tokio, tmux, COSMIC, D
 
 `application/` contains use cases and orchestration:
 
-- add/edit workflow orchestration;
+- new/edit workflow orchestration;
 - environment run/reconciliation;
 - stop;
 - delete;
@@ -1218,7 +1230,7 @@ Use `ratatui` for the primary full-screen terminal interface. Use `dialoguer` fo
 
 ### 18.2 Dynamic environment editor
 
-`workstate add <environment>` should feel like a dynamic builder, not a rigid list of technology-specific questions.
+`workstate new <environment>` creates a new environment and `workstate edit <environment>` edits an existing one. Both commands must use the same dynamic builder, not a rigid list of technology-specific questions.
 
 The editor uses a focused two-pane layout:
 
@@ -1463,7 +1475,7 @@ Use `insta` snapshots for stable TUI states and important output. Snapshots must
 
 - empty environment selector;
 - populated selector with statuses;
-- dynamic add editor;
+- shared new/edit environment editor;
 - validation errors;
 - graph dependency errors;
 - execution progress;

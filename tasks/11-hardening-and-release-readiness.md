@@ -73,7 +73,7 @@ Keep test scenarios independent from the live user's desktop. Use fake ports and
 2. Detect the runtime OS, distribution, desktop, and required tools before constructing platform-dependent adapters.
 3. Reject every Workstate command on an unsupported runtime before:
    - opening the TUI;
-   - opening the add editor;
+   - opening the new editor;
    - reading or writing an environment;
    - starting a process;
    - changing a desktop setting.
@@ -91,14 +91,16 @@ Test the public behavior:
 
 1. Workstate with no arguments opens the selector.
 2. Workstate with an environment name starts or reconciles it directly.
-3. A missing environment returns an actionable error suggesting workstate add followed by the name.
-4. Workstate add followed by a name opens the dynamic editor and saves one environment directory.
-5. Adding an existing name edits the environment through the same MVP flow.
-6. Workstate stop followed by a name restores and cleans only owned resources.
-7. Workstate delete followed by a name stops first and then removes only that environment's Workstate data.
-8. Delete confirmation is shown by default and the yes flag bypasses only confirmation.
-9. All user-facing output, prompts, errors, help, logs, and documentation are English.
-10. Every command returns a predictable non-zero exit status on failure.
+3. A missing environment returns an actionable error suggesting workstate new followed by the name.
+4. Workstate new followed by a new name opens the dynamic editor and saves one environment directory.
+5. Workstate new followed by an existing name fails and suggests workstate edit.
+6. Workstate edit followed by an existing name opens the same dynamic editor and saves changes.
+7. Workstate edit followed by a missing name fails and suggests workstate new.
+8. Workstate stop followed by a name restores and cleans only owned resources.
+9. Workstate delete followed by a name stops first and then removes only that environment's Workstate data.
+10. Delete confirmation is shown by default and the yes flag bypasses only confirmation.
+11. All user-facing output, prompts, errors, help, logs, and documentation are English.
+12. Every command returns a predictable non-zero exit status on failure.
 
 ### 3. Verify the complete environment scenario
 
@@ -175,7 +177,7 @@ For each scenario:
 
 ### 7. Verify TUI behavior and accessibility
 
-1. Add snapshots for the selector, add editor, validation error, setup progress, rollback failure, already-correct summary, stop summary, delete confirmation, and unsupported-platform error.
+1. Add snapshots for the selector, new editor, validation error, setup progress, rollback failure, already-correct summary, stop summary, delete confirmation, and unsupported-platform error.
 2. Ensure long names, long paths, long commands, Unicode paths, empty lists, and terminal resizing render safely.
 3. Keep the TUI event-driven and non-blocking.
 4. Ensure the main terminal is restored even when a render loop or action fails.
@@ -239,7 +241,7 @@ Review dependencies for unnecessary additions, feature flags, compile-time cost,
 
 1. Keep AGENTS.md aligned with the actual module tree, commands, persistence format, ports, testing commands, and safety rules.
 2. Document the supported runtime without suggesting that unsupported platforms are silently accepted.
-3. Document the add flow and the environment model with an English TOML example.
+3. Document the new flow and the environment model with an English TOML example.
 4. Document the distinction between one-shot commands and persistent tmux commands.
 5. Document the attach command shown after a successful start.
 6. Document stop and delete ownership behavior.
@@ -252,7 +254,7 @@ The task is not complete without:
 
 1. Unit tests for every domain invariant.
 2. Fake-backend integration tests covering all action families.
-3. End-to-end command-dispatch tests for start, selector, add, stop, and delete.
+3. End-to-end command-dispatch tests for start, selector, new, stop, and delete.
 4. Unsupported-platform tests for every public command.
 5. Transaction rollback tests at every integration boundary.
 6. Shared-resource ownership tests.
