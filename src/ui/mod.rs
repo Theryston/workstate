@@ -2,6 +2,7 @@ pub mod app;
 pub mod editor;
 pub mod event;
 pub mod progress;
+pub mod prompt;
 pub mod state;
 pub mod theme;
 pub mod widgets;
@@ -21,6 +22,7 @@ pub use event::{
 pub use progress::{
     ActionProgressStatus, ProgressEntry, ProgressEvent, ProgressLog, ProgressState,
 };
+pub use prompt::text as prompt_text;
 pub use state::{
     EnvironmentListItem, EnvironmentStatus, SELECTOR_EMPTY_MESSAGE, SelectorAction, SelectorState,
 };

@@ -12,11 +12,13 @@ use crate::{
     infrastructure::persistence::WorkstatePaths,
     ui::{
         EditorMode, EditorOutcome, EditorState, EnvironmentListItem, EnvironmentStatus,
-        SelectorState, confirm_delete, edit_environment as run_editor, select_environment,
+        SelectorState, confirm_delete, edit_environment as run_editor, prompt_text,
+        select_environment,
     },
 };
 
 use self::{
+    args::EnvironmentArgument,
     command::{Command, Invocation, parse_from},
     output::{ConsoleOutput, OutputPolicy, OutputSink},
 };
@@ -69,9 +71,15 @@ async fn dispatch(context: &AppContext, invocation: Invocation) -> Result<()> {
             run_environment(context, &slug, &invocation.options, &policy, &mut output).await
         }
         Command::New { environment } => {
+            let Some(argument) = select_or_prompt_new_environment(
+                environment.as_ref(),
+                invocation.options.no_color,
+            )? else {
+                return Ok(());
+            };
             new_environment(
                 context,
-                environment.as_str(),
+                argument.as_str(),
                 &invocation.options,
                 &policy,
                 &mut output,
@@ -79,6 +87,13 @@ async fn dispatch(context: &AppContext, invocation: Invocation) -> Result<()> {
             .await
         }
         Command::Edit { environment } => {
+            let Some(environment) = select_existing_environment(
+                context,
+                environment.as_ref(),
+                invocation.options.no_color,
+            )? else {
+                return Ok(());
+            };
             edit_environment_command(
                 context,
                 environment.as_str(),
@@ -89,6 +104,13 @@ async fn dispatch(context: &AppContext, invocation: Invocation) -> Result<()> {
             .await
         }
         Command::Stop { environment } => {
+            let Some(environment) = select_existing_environment(
+                context,
+                environment.as_ref(),
+                invocation.options.no_color,
+            )? else {
+                return Ok(());
+            };
             stop_environment(
                 context,
                 environment.as_str(),
@@ -99,6 +121,13 @@ async fn dispatch(context: &AppContext, invocation: Invocation) -> Result<()> {
             .await
         }
         Command::Delete { environment } => {
+            let Some(environment) = select_existing_environment(
+                context,
+                environment.as_ref(),
+                invocation.options.no_color,
+            )? else {
+                return Ok(());
+            };
             delete_environment(
                 context,
                 environment.as_str(),
@@ -108,6 +137,35 @@ async fn dispatch(context: &AppContext, invocation: Invocation) -> Result<()> {
             )
             .await
         }
+    }
+}
+
+fn select_existing_environment(
+    context: &AppContext,
+    argument: Option<&EnvironmentArgument>,
+    no_color: bool,
+) -> Result<Option<EnvironmentSlug>> {
+    match argument {
+        Some(argument) => resolve_environment_slug(argument.as_str()).map(Some),
+        None => select_environment(load_selector_state(context)?, no_color),
+    }
+}
+
+fn select_or_prompt_new_environment(
+    argument: Option<&EnvironmentArgument>,
+    no_color: bool,
+) -> Result<Option<EnvironmentArgument>> {
+    match argument {
+        Some(argument) => Ok(Some(argument.clone())),
+        None => prompt_text(
+            "Environment name",
+            None,
+            no_color,
+            |value| EnvironmentArgument::new(value.as_str()).map(|_| ()),
+        )?
+        .map(EnvironmentArgument::new)
+        .transpose()
+        .map_err(|error| WorkstateError::new(ErrorCategory::Cli, error)),
     }
 }
 

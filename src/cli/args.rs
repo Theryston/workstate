@@ -45,22 +45,22 @@ pub enum CliSubcommand {
     #[command(about = "Create a new environment")]
     New {
         #[arg(value_name = "ENVIRONMENT")]
-        environment: EnvironmentArgument,
+        environment: Option<EnvironmentArgument>,
     },
     #[command(about = "Edit an environment")]
     Edit {
         #[arg(value_name = "ENVIRONMENT")]
-        environment: EnvironmentArgument,
+        environment: Option<EnvironmentArgument>,
     },
     #[command(about = "Stop an environment")]
     Stop {
         #[arg(value_name = "ENVIRONMENT")]
-        environment: EnvironmentArgument,
+        environment: Option<EnvironmentArgument>,
     },
     #[command(about = "Stop and delete an environment")]
     Delete {
         #[arg(value_name = "ENVIRONMENT")]
-        environment: EnvironmentArgument,
+        environment: Option<EnvironmentArgument>,
     },
 }
 
@@ -140,7 +140,7 @@ mod tests {
         assert_eq!(
             parsed.subcommand,
             Some(CliSubcommand::New {
-                environment: expected_environment,
+                environment: Some(expected_environment),
             })
         );
         assert!(parsed.environment.is_none());
@@ -150,9 +150,13 @@ mod tests {
     fn parses_each_public_subcommand_and_positional_start() {
         assert!(Cli::try_parse_from(["workstate", "my-app"]).is_ok());
         assert!(Cli::try_parse_from(["workstate", "new", "my-app"]).is_ok());
+        assert!(Cli::try_parse_from(["workstate", "new"]).is_ok());
         assert!(Cli::try_parse_from(["workstate", "edit", "my-app"]).is_ok());
+        assert!(Cli::try_parse_from(["workstate", "edit"]).is_ok());
         assert!(Cli::try_parse_from(["workstate", "stop", "my-app"]).is_ok());
+        assert!(Cli::try_parse_from(["workstate", "stop"]).is_ok());
         assert!(Cli::try_parse_from(["workstate", "delete", "my-app"]).is_ok());
+        assert!(Cli::try_parse_from(["workstate", "delete"]).is_ok());
         assert!(Cli::try_parse_from(["workstate", "--yes", "edit", "my-app"]).is_ok());
     }
 

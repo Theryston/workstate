@@ -16,10 +16,18 @@ pub struct Invocation {
 pub enum Command {
     Select,
     Start { environment: EnvironmentArgument },
-    New { environment: EnvironmentArgument },
-    Edit { environment: EnvironmentArgument },
-    Stop { environment: EnvironmentArgument },
-    Delete { environment: EnvironmentArgument },
+    New {
+        environment: Option<EnvironmentArgument>,
+    },
+    Edit {
+        environment: Option<EnvironmentArgument>,
+    },
+    Stop {
+        environment: Option<EnvironmentArgument>,
+    },
+    Delete {
+        environment: Option<EnvironmentArgument>,
+    },
 }
 
 pub fn parse_from<I, T>(arguments: I) -> Result<Invocation>
