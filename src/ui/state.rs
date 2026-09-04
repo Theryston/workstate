@@ -22,9 +22,12 @@ impl EnvironmentStatus {
             RunStatus::Ready => Self::Ready,
             RunStatus::Stopped => Self::Stopped,
             RunStatus::Active
+            | RunStatus::Planning
             | RunStatus::Partial
             | RunStatus::RollingBack
-            | RunStatus::RollbackFailed => Self::Partial,
+            | RunStatus::RollbackFailed
+            | RunStatus::Stopping
+            | RunStatus::Deleting => Self::Partial,
         }
     }
 }

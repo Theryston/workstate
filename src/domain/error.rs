@@ -74,4 +74,6 @@ pub enum DomainError {
     DuplicateRuntimeMutation { target: String },
     #[error("graph invariant failed: {message}")]
     GraphInvariant { message: String },
+    #[error("invalid lifecycle transition from {from} to {to}")]
+    InvalidLifecycleTransition { from: String, to: String },
 }

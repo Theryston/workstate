@@ -14,7 +14,7 @@ use crate::{
             ReadinessCheckRunner, cancellation_error, is_cancellation_error, run_with_timeout,
         },
         ports::{Clock, SystemClock},
-        reconciliation::{ApplicationEvent, EventSink},
+        reconciliation::{ApplicationEvent, EventSink, ExecutionObserver},
     },
     domain::{ActionId, ActionSpec},
     error::{ErrorCategory, Result, WorkstateError},
@@ -127,6 +127,18 @@ impl Scheduler {
         events: Arc<dyn EventSink>,
         dry_run: bool,
     ) -> Result<RunReport> {
+        self.execute_with_observer(plan, cancellation, events, dry_run, None)
+            .await
+    }
+
+    pub async fn execute_with_observer(
+        &self,
+        plan: &ExecutionPlan,
+        cancellation: CancellationToken,
+        events: Arc<dyn EventSink>,
+        dry_run: bool,
+        observer: Option<Arc<dyn ExecutionObserver>>,
+    ) -> Result<RunReport> {
         self.validate_options()?;
         self.validate_plan(plan)?;
         let started_at = self.clock.monotonic_now();
@@ -199,6 +211,16 @@ impl Scheduler {
                         };
                         statuses.insert(action_id.clone(), ActionRunStatus::Running);
                         running_ids.insert(action_id.clone());
+                        if let Some(observer) = observer.as_ref()
+                            && let Err(error) = observer.action_started(&action_id).await
+                        {
+                            statuses.insert(action_id.clone(), ActionRunStatus::Failed);
+                            running_ids.remove(&action_id);
+                            primary_action = Some(action_id);
+                            primary_error = Some(error);
+                            cancellation.cancel();
+                            break;
+                        }
                         events
                             .emit(ApplicationEvent::ActionStarted {
                                 action_id: action_id.clone(),
@@ -283,6 +305,18 @@ impl Scheduler {
             running_ids.remove(&task.action_id);
             match task.result {
                 Ok(result) => {
+                    if let Some(observer) = observer.as_ref()
+                        && let Err(error) =
+                            observer.action_succeeded(&task.action_id, &result).await
+                    {
+                        statuses.insert(task.action_id.clone(), ActionRunStatus::Failed);
+                        if primary_error.is_none() {
+                            primary_action = Some(task.action_id);
+                            primary_error = Some(error);
+                            cancellation.cancel();
+                        }
+                        continue;
+                    }
                     let output = result.outputs.clone();
                     results.insert(task.action_id.clone(), result);
                     statuses.insert(task.action_id.clone(), ActionRunStatus::Ready);

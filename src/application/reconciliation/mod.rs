@@ -8,8 +8,8 @@ use tokio::sync::mpsc;
 use crate::{
     application::{
         planner::{
-            ActionHandlerRegistry, ActionOutputStream, CancellationToken, PlanClassification,
-            Planner, ReadinessCheckRunner,
+            ActionExecutionResult, ActionHandlerRegistry, ActionOutputStream, CancellationToken,
+            PlanClassification, Planner, ReadinessCheckRunner,
         },
         ports::{BoxFuture, Clock, SystemClock},
     },
@@ -18,8 +18,14 @@ use crate::{
     integrations::IntegrationRegistry,
 };
 
+pub mod engine;
+pub mod ownership;
+pub mod rollback;
 pub mod scheduler;
 
+pub use engine::{DeleteResult, LifecycleEngine, LifecycleRunResult, StopResult};
+pub use ownership::{CleanupDecision, OwnershipRegistry};
+pub use rollback::{RollbackFailure, RollbackReport};
 pub use scheduler::{ActionRunStatus, RunReport, Scheduler, SchedulerOptions};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +90,31 @@ pub enum ApplicationEvent {
         success: bool,
         detail: Option<String>,
     },
+    RollbackFinished {
+        success: bool,
+    },
+    StopStarted {
+        environment: EnvironmentSlug,
+    },
+    ResourceCleanupSkipped {
+        resource: String,
+        reason: String,
+    },
+    StopCompleted {
+        environment: EnvironmentSlug,
+        cleaned_resources: usize,
+        preserved_resources: usize,
+    },
+    StopFailed {
+        environment: EnvironmentSlug,
+        error: String,
+    },
+    DeleteStarted {
+        environment: EnvironmentSlug,
+    },
+    DeleteCompleted {
+        environment: EnvironmentSlug,
+    },
     RunCompleted {
         environment: EnvironmentSlug,
         elapsed_milliseconds: u128,
@@ -98,6 +129,20 @@ pub enum ApplicationEvent {
 
 pub trait EventSink: Send + Sync {
     fn emit<'a>(&'a self, event: ApplicationEvent) -> BoxFuture<'a, Result<()>>;
+}
+
+pub trait ExecutionObserver: Send + Sync {
+    fn action_started<'a>(&'a self, _action_id: &'a ActionId) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn action_succeeded<'a>(
+        &'a self,
+        _action_id: &'a ActionId,
+        _result: &'a ActionExecutionResult,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 #[derive(Clone)]
@@ -231,7 +276,25 @@ impl<'a> ReconciliationEngine<'a> {
         cancellation: CancellationToken,
         events: Arc<dyn EventSink>,
     ) -> Result<RunReport> {
-        let started_at = self.clock.monotonic_now();
+        let plan = self
+            .prepare(
+                configuration,
+                &request,
+                cancellation.clone(),
+                events.clone(),
+            )
+            .await?;
+        self.execute_plan(&plan, request, cancellation, events, None)
+            .await
+    }
+
+    pub async fn prepare(
+        &self,
+        configuration: &EnvironmentConfig,
+        request: &RunRequest,
+        cancellation: CancellationToken,
+        events: Arc<dyn EventSink>,
+    ) -> Result<crate::application::planner::ExecutionPlan> {
         let environment = configuration.slug.clone();
         events
             .emit(ApplicationEvent::RunStarted {
@@ -287,9 +350,29 @@ impl<'a> ReconciliationEngine<'a> {
                 .await?;
         }
 
+        Ok(plan)
+    }
+
+    pub async fn execute_plan(
+        &self,
+        plan: &crate::application::planner::ExecutionPlan,
+        request: RunRequest,
+        cancellation: CancellationToken,
+        events: Arc<dyn EventSink>,
+        observer: Option<Arc<dyn ExecutionObserver>>,
+    ) -> Result<RunReport> {
+        let started_at = self.clock.monotonic_now();
+        let environment = plan.environment.clone();
+
         let result = self
             .scheduler
-            .execute(&plan, cancellation, events.clone(), request.dry_run)
+            .execute_with_observer(
+                plan,
+                cancellation,
+                events.clone(),
+                request.dry_run,
+                observer,
+            )
             .await;
         match result {
             Ok(report) => {
@@ -303,8 +386,7 @@ impl<'a> ReconciliationEngine<'a> {
                 Ok(report)
             }
             Err(error) => {
-                self.emit_failure(&events, &configuration.slug, &error)
-                    .await?;
+                self.emit_failure(&events, &environment, &error).await?;
                 Err(error)
             }
         }

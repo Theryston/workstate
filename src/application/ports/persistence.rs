@@ -25,4 +25,17 @@ pub trait StateStore: Send + Sync {
         self.save(state)?;
         Ok(true)
     }
+
+    fn load_for(
+        &self,
+        environments: &[EnvironmentSlug],
+    ) -> Result<Vec<(EnvironmentSlug, RuntimeState)>> {
+        let mut states = Vec::new();
+        for environment in environments {
+            if let Some(state) = self.load(environment)? {
+                states.push((environment.clone(), state));
+            }
+        }
+        Ok(states)
+    }
 }

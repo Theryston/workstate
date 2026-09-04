@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ActionId, CleanupStatus, DomainError, EnvironmentSlug, MutationRecord, ResourceRecord,
-    RunStatus,
+    ActionId, CleanupStatus, DomainError, EnvironmentSlug, MutationRecord, ResourceIdentity,
+    ResourceRecord, RunStatus,
 };
 
 pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 1;
@@ -36,7 +36,7 @@ impl RuntimeState {
             schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
             environment_slug,
             run_id: run_id.into(),
-            status: RunStatus::Active,
+            status: RunStatus::Planning,
             started_at_unix_milliseconds: None,
             updated_at_unix_milliseconds: None,
             resources: Vec::new(),
@@ -97,6 +97,37 @@ impl RuntimeState {
         Ok(())
     }
 
+    pub fn upsert_resource(&mut self, mut record: ResourceRecord) -> Result<(), DomainError> {
+        if let Some(existing) = self
+            .resources
+            .iter_mut()
+            .find(|item| item.resource == record.resource)
+        {
+            existing.observed_before |= record.observed_before;
+            existing.ownership = existing.ownership.merge(record.ownership);
+            if existing.action_id.is_none() {
+                existing.action_id = record.action_id.take();
+            }
+            if existing.cleanup_policy == super::CleanupPolicy::Preserve {
+                record.cleanup_policy = super::CleanupPolicy::Preserve;
+            }
+            existing.cleanup_policy = record.cleanup_policy;
+            existing
+                .integration_metadata
+                .append(&mut record.integration_metadata);
+            return Ok(());
+        }
+
+        self.resources.push(record);
+        Ok(())
+    }
+
+    pub fn resource(&self, identity: &ResourceIdentity) -> Option<&ResourceRecord> {
+        self.resources
+            .iter()
+            .find(|record| &record.resource == identity)
+    }
+
     pub fn record_mutation(&mut self, record: MutationRecord) -> Result<(), DomainError> {
         if self
             .mutations
@@ -112,8 +143,55 @@ impl RuntimeState {
         Ok(())
     }
 
+    pub fn upsert_mutation(&mut self, record: MutationRecord) -> Result<(), DomainError> {
+        if let Some(existing) = self
+            .mutations
+            .iter_mut()
+            .find(|mutation| mutation.target == record.target)
+        {
+            *existing = record;
+            return Ok(());
+        }
+        self.mutations.push(record);
+        Ok(())
+    }
+
+    pub fn mutation_mut(&mut self, target: &str) -> Option<&mut MutationRecord> {
+        self.mutations
+            .iter_mut()
+            .find(|mutation| mutation.target == target)
+    }
+
     pub fn set_status(&mut self, status: RunStatus) {
         self.status = status;
+    }
+
+    pub fn transition_to(&mut self, status: RunStatus) -> Result<(), DomainError> {
+        if self.status == status {
+            return Ok(());
+        }
+        if !self.status.can_transition_to(status) {
+            return Err(DomainError::InvalidLifecycleTransition {
+                from: self.status.to_string(),
+                to: status.to_string(),
+            });
+        }
+        self.status = status;
+        Ok(())
+    }
+
+    pub fn begin_run(&mut self, run_id: impl Into<String>) -> Result<(), DomainError> {
+        let run_id = run_id.into();
+        if run_id.is_empty() || run_id.contains('\0') {
+            return Err(DomainError::InvalidIdentifier {
+                kind: "run".to_owned(),
+                value: run_id,
+            });
+        }
+        self.run_id = run_id;
+        self.active_tasks.clear();
+        self.cleanup_status = CleanupStatus::default();
+        self.transition_to(RunStatus::Planning)
     }
 
     pub fn set_cleanup_status(&mut self, status: CleanupStatus) {

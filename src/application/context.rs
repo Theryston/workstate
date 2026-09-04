@@ -18,7 +18,7 @@ use crate::{
     },
     application::{
         planner::{ActionHandlerRegistry, NoopReadinessCheckRunner, ReadinessCheckRunner},
-        reconciliation::{ReconciliationEngine, SchedulerOptions},
+        reconciliation::{LifecycleEngine, ReconciliationEngine, SchedulerOptions},
     },
     domain::{EnvironmentConfig, EnvironmentSlug, RuntimeState},
     error::{ErrorCategory, Result, WorkstateError},
@@ -224,6 +224,18 @@ impl AppContext {
             Arc::clone(&self.action_handlers),
             Arc::clone(&self.readiness_runner),
             Arc::clone(&self.clock),
+            options,
+        )
+    }
+
+    pub fn lifecycle_engine(&self, options: SchedulerOptions) -> LifecycleEngine<'_> {
+        LifecycleEngine::new(
+            self.integration_registry.as_ref(),
+            Arc::clone(&self.action_handlers),
+            Arc::clone(&self.readiness_runner),
+            Arc::clone(&self.clock),
+            Arc::clone(&self.config_store),
+            Arc::clone(&self.state_store),
             options,
         )
     }

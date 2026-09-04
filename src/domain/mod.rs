@@ -17,7 +17,10 @@ pub use environment::{
 };
 pub use error::DomainError;
 pub use graph::ActionGraph;
-pub use ownership::{CleanupStatus, MutationRecord, OwnershipStatus, ResourceRecord, RunStatus};
+pub use ownership::{
+    CleanupStatus, CompensationOperation, MutationRecord, OwnershipStatus, ResourceRecord,
+    RestorationStatus, RunStatus,
+};
 pub use resource::{ResourceIdentity, ResourceKind};
 pub use runtime_state::{CURRENT_RUNTIME_SCHEMA_VERSION, RuntimeState};
 pub use workspace::{

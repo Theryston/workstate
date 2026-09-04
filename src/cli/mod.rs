@@ -2,11 +2,12 @@ pub mod args;
 pub mod command;
 pub mod output;
 
-use std::ffi::OsString;
+use std::{ffi::OsString, sync::Arc};
 
 use crate::{
     application::context::AppContext,
-    domain::{EnvironmentConfig, EnvironmentName, EnvironmentSlug, RunStatus},
+    application::{reconciliation::InMemoryEventSink, use_cases},
+    domain::{EnvironmentConfig, EnvironmentName, EnvironmentSlug, ExecutionMode},
     error::{ErrorCategory, Result, WorkstateError},
     infrastructure::persistence::WorkstatePaths,
     ui::{
@@ -74,20 +75,26 @@ async fn dispatch(context: &AppContext, invocation: Invocation) -> Result<()> {
             &policy,
             &mut output,
         ),
-        Command::Stop { environment } => stop_environment(
-            context,
-            environment.as_str(),
-            &invocation.options,
-            &policy,
-            &mut output,
-        ),
-        Command::Delete { environment } => delete_environment(
-            context,
-            environment.as_str(),
-            &invocation.options,
-            &policy,
-            &mut output,
-        ),
+        Command::Stop { environment } => {
+            stop_environment(
+                context,
+                environment.as_str(),
+                &invocation.options,
+                &policy,
+                &mut output,
+            )
+            .await
+        }
+        Command::Delete { environment } => {
+            delete_environment(
+                context,
+                environment.as_str(),
+                &invocation.options,
+                &policy,
+                &mut output,
+            )
+            .await
+        }
     }
 }
 
@@ -121,18 +128,31 @@ async fn run_environment(
     let Some(configuration) = context.config_store().load(slug)? else {
         return Err(environment_not_found(slug.as_str()));
     };
-    configuration.validate().map_err(WorkstateError::from)?;
-
+    let background = configuration
+        .actions
+        .iter()
+        .any(|action| action.execution_mode == Some(ExecutionMode::Background));
+    let events = Arc::new(InMemoryEventSink::default());
+    let result = use_cases::run::execute(context, slug, options.dry_run, events).await?;
     let message = if options.dry_run {
         format!(
-            "Dry run: '{}' is valid and ready for lifecycle reconciliation.",
+            "Dry run complete for '{}': {} change(s) would be applied.",
+            configuration.name, result.report.planned_change_count
+        )
+    } else if result.report.planned_change_count == 0 {
+        format!(
+            "Environment '{}' is already in the desired state.",
             configuration.name
         )
     } else {
-        format!(
-            "Environment '{}' is valid. Lifecycle execution is ready for the application engine.",
-            configuration.name
-        )
+        let mut message = format!("Environment '{}' is ready.", configuration.name);
+        if background {
+            message.push_str(&format!(
+                "\n\nInspect background processes with:\n  tmux attach-session -t workstate-{}\n\nStop with:\n  workstate stop {}",
+                slug, slug
+            ));
+        }
+        message
     };
     policy.write_message(output, &message)
 }
@@ -177,7 +197,7 @@ fn add_environment(
     }
 }
 
-fn stop_environment(
+async fn stop_environment(
     context: &AppContext,
     argument: &str,
     options: &args::GlobalOptions,
@@ -189,16 +209,9 @@ fn stop_environment(
         return Err(environment_not_found(argument));
     };
     let runtime = context.state_store().load(&slug)?;
-    let active = runtime.as_ref().is_some_and(|state| {
-        matches!(
-            state.status,
-            RunStatus::Active
-                | RunStatus::Ready
-                | RunStatus::Partial
-                | RunStatus::RollingBack
-                | RunStatus::RollbackFailed
-        )
-    });
+    let active = runtime
+        .as_ref()
+        .is_some_and(|state| state.status.is_active());
     if options.dry_run {
         return policy.write_message(
             output,
@@ -208,20 +221,18 @@ fn stop_environment(
             ),
         );
     }
-    if active {
-        return Err(WorkstateError::new(
-            ErrorCategory::Runtime,
-            "stop requires the lifecycle engine to reconcile owned resources",
-        )
-        .with_context("environment", configuration.name.to_string()));
-    }
+    let events = Arc::new(InMemoryEventSink::default());
+    let result = use_cases::stop::execute(context, &slug, events).await?;
     policy.write_message(
         output,
-        &format!("Environment '{}' is already stopped.", configuration.name),
+        &format!(
+            "Environment '{}' stopped. Cleaned {} resource(s); preserved {}.",
+            configuration.name, result.cleaned_resources, result.preserved_resources
+        ),
     )
 }
 
-fn delete_environment(
+async fn delete_environment(
     context: &AppContext,
     argument: &str,
     options: &args::GlobalOptions,
@@ -233,16 +244,9 @@ fn delete_environment(
         return Err(environment_not_found(argument));
     };
     let runtime = context.state_store().load(&slug)?;
-    let active = runtime.as_ref().is_some_and(|state| {
-        matches!(
-            state.status,
-            RunStatus::Active
-                | RunStatus::Ready
-                | RunStatus::Partial
-                | RunStatus::RollingBack
-                | RunStatus::RollbackFailed
-        )
-    });
+    let active = runtime
+        .as_ref()
+        .is_some_and(|state| state.status.is_active());
     let paths = WorkstatePaths::from_file_system(context.file_system())?;
     let environment_paths = paths.environment(&slug)?;
 
@@ -268,19 +272,8 @@ fn delete_environment(
         return Ok(());
     }
 
-    if active {
-        return Err(WorkstateError::new(
-            ErrorCategory::Runtime,
-            "delete requires the lifecycle engine to stop active resources before removal",
-        )
-        .with_context("environment", configuration.name.to_string())
-        .with_context(
-            "directory",
-            environment_paths.directory().display().to_string(),
-        ));
-    }
-
-    context.config_store().delete(&slug)?;
+    let events = Arc::new(InMemoryEventSink::default());
+    use_cases::delete::execute(context, &slug, events).await?;
     policy.write_message(
         output,
         &format!("Environment '{}' deleted.", configuration.name),
