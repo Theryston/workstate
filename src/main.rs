@@ -14,6 +14,6 @@ async fn main() -> ExitCode {
 }
 
 fn report_error(error: workstate::WorkstateError) -> ExitCode {
-    eprintln!("{error}");
+    eprintln!("{}", error.render());
     ExitCode::from(error.exit_code())
 }

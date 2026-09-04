@@ -89,12 +89,107 @@ impl WorkstateError {
         self
     }
 
+    pub fn render(&self) -> String {
+        if let Some(rendered) = self.render_platform_diagnostics() {
+            return rendered;
+        }
+        if self.context.is_empty() {
+            return self.to_string();
+        }
+
+        let mut rendered = self.to_string();
+        let preferred_keys = [
+            "operating_system",
+            "distribution",
+            "desktop_environment",
+            "terminal_capability",
+            "supported_profiles",
+            "missing_capabilities",
+        ];
+        for key in preferred_keys
+            .into_iter()
+            .filter(|key| self.context.contains_key(*key))
+            .chain(
+                self.context
+                    .keys()
+                    .map(String::as_str)
+                    .filter(|key| !preferred_keys.contains(key)),
+            )
+        {
+            let Some(value) = self.context.get(key) else {
+                continue;
+            };
+            rendered.push('\n');
+            rendered.push_str("  ");
+            rendered.push_str(&humanize_context_key(key));
+            rendered.push_str(": ");
+            rendered.push_str(value);
+        }
+        rendered
+    }
+
+    fn render_platform_diagnostics(&self) -> Option<String> {
+        if self.category != ErrorCategory::Platform {
+            return None;
+        }
+
+        let operating_system = self.context.get("operating_system")?;
+        let distribution = self.context.get("distribution")?;
+        let desktop_environment = self.context.get("desktop_environment")?;
+        let terminal_capability = self.context.get("terminal_capability")?;
+        let supported_profiles = self.context.get("supported_profiles")?;
+
+        let mut rendered = self.message.clone();
+        rendered.push_str("\n\nDetected environment:\n");
+        rendered.push_str("  Operating system: ");
+        rendered.push_str(operating_system);
+        rendered.push('\n');
+        rendered.push_str("  Distribution: ");
+        rendered.push_str(distribution);
+        rendered.push('\n');
+        rendered.push_str("  Desktop environment: ");
+        rendered.push_str(desktop_environment);
+        rendered.push('\n');
+        rendered.push_str("  Terminal capability: ");
+        rendered.push_str(terminal_capability);
+        rendered.push_str("\n\nCurrently supported:\n");
+        for profile in supported_profiles.split("; ") {
+            rendered.push_str("  ");
+            rendered.push_str(profile);
+            rendered.push('\n');
+        }
+        if let Some(missing) = self.context.get("missing_capabilities") {
+            rendered.push_str("\nMissing capabilities:\n  ");
+            rendered.push_str(missing);
+            rendered.push('\n');
+        }
+
+        Some(rendered)
+    }
+
     pub const fn exit_code(&self) -> u8 {
         match self.category {
             ErrorCategory::Cli => 2,
             _ => 1,
         }
     }
+}
+
+fn humanize_context_key(key: &str) -> String {
+    let mut result = String::with_capacity(key.len());
+    let mut uppercase_next = true;
+    for character in key.chars() {
+        if character == '_' {
+            result.push(' ');
+            uppercase_next = true;
+        } else if uppercase_next {
+            result.extend(character.to_uppercase());
+            uppercase_next = false;
+        } else {
+            result.push(character);
+        }
+    }
+    result
 }
 
 impl From<DomainError> for WorkstateError {

@@ -1,8 +1,3 @@
-#[derive(Debug, Default)]
-pub struct IntegrationRegistry;
+pub mod registry;
 
-impl IntegrationRegistry {
-    pub const fn new() -> Self {
-        Self
-    }
-}
+pub use registry::{ActionHandlerDescriptor, CapabilityAvailability, IntegrationRegistry};

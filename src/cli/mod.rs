@@ -1,5 +1,6 @@
 use crate::{application::context::AppContext, error::Result};
 
-pub(crate) async fn run(_context: AppContext) -> Result<()> {
+pub(crate) async fn run(context: AppContext) -> Result<()> {
+    context.preflight()?;
     Ok(())
 }

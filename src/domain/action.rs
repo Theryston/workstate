@@ -332,6 +332,25 @@ pub enum ActionKind {
     Custom { name: String },
 }
 
+impl ActionKind {
+    pub fn key(&self) -> String {
+        match self {
+            Self::OpenApplication => "open_application".to_owned(),
+            Self::OpenProject => "open_project".to_owned(),
+            Self::RunCommand => "run_command".to_owned(),
+            Self::StartService => "start_service".to_owned(),
+            Self::CreateOrSelectWorkspace => "create_or_select_workspace".to_owned(),
+            Self::ConfigureTiling => "configure_tiling".to_owned(),
+            Self::StartContainer => "start_container".to_owned(),
+            Self::StartCompose => "start_compose".to_owned(),
+            Self::StartAndroidEmulator => "start_android_emulator".to_owned(),
+            Self::WaitForCondition => "wait_for_condition".to_owned(),
+            Self::VerifyResource => "verify_resource".to_owned(),
+            Self::Custom { name } => format!("custom:{name}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReadinessCheck {

@@ -24,7 +24,10 @@ use crate::{
         persistence::{TomlConfigStore, TomlStateStore, WorkstatePaths},
     },
     integrations::IntegrationRegistry,
-    platform::PlatformInfo,
+    platform::{
+        DesktopEnvironment, DetectedPlatform, Distribution, OperatingSystem, TerminalCapability,
+    },
+    platform::{detection::RuntimePlatformDetector, linux::SystemPlatformProbe},
 };
 
 pub struct AppDependencies {
@@ -44,19 +47,22 @@ pub struct AppDependencies {
 
 impl AppDependencies {
     pub fn with_noop_dependencies() -> Self {
+        let platform = supported_test_platform();
         Self {
             config_store: Arc::new(UnavailableBackend::new("configuration store")),
             state_store: Arc::new(UnavailableBackend::new("state store")),
             file_system: Arc::new(UnavailableBackend::new("filesystem")),
             process_runner: Arc::new(UnavailableBackend::new("process runner")),
             clock: Arc::new(SystemClock),
-            platform_detector: Arc::new(UnavailableBackend::new("platform detector")),
+            platform_detector: Arc::new(StaticPlatformDetector {
+                platform: platform.clone(),
+            }),
             desktop_backend: Arc::new(UnavailableBackend::new("desktop backend")),
             terminal_backend: Arc::new(UnavailableBackend::new("terminal backend")),
             container_backend: Arc::new(UnavailableBackend::new("container backend")),
             editor_backend: Arc::new(UnavailableBackend::new("editor backend")),
             emulator_backend: Arc::new(UnavailableBackend::new("emulator backend")),
-            integration_registry: Arc::new(IntegrationRegistry::new()),
+            integration_registry: Arc::new(IntegrationRegistry::for_detected_platform(&platform)),
         }
     }
 }
@@ -108,6 +114,10 @@ impl AppContext {
         ));
         let state_store: Arc<dyn StateStore> =
             Arc::new(TomlStateStore::new(Arc::clone(&file_system), paths));
+        let platform_detector = RuntimePlatformDetector::new(SystemPlatformProbe);
+        let detected_platform = platform_detector.detect()?;
+        let integration_registry =
+            IntegrationRegistry::from_platform(&detected_platform, &SystemPlatformProbe)?;
 
         Ok(Self::new(AppDependencies {
             config_store,
@@ -115,13 +125,13 @@ impl AppContext {
             file_system,
             process_runner: Arc::new(UnavailableBackend::new("process runner")),
             clock: Arc::new(SystemClock),
-            platform_detector: Arc::new(UnavailableBackend::new("platform detector")),
+            platform_detector: Arc::new(platform_detector),
             desktop_backend: Arc::new(UnavailableBackend::new("desktop backend")),
             terminal_backend: Arc::new(UnavailableBackend::new("terminal backend")),
             container_backend: Arc::new(UnavailableBackend::new("container backend")),
             editor_backend: Arc::new(UnavailableBackend::new("editor backend")),
             emulator_backend: Arc::new(UnavailableBackend::new("emulator backend")),
-            integration_registry: Arc::new(IntegrationRegistry::new()),
+            integration_registry: Arc::new(integration_registry),
         }))
     }
 
@@ -172,6 +182,11 @@ impl AppContext {
     pub fn integration_registry(&self) -> &IntegrationRegistry {
         self.integration_registry.as_ref()
     }
+
+    pub fn preflight(&self) -> Result<()> {
+        let platform = self.platform_detector.detect()?;
+        self.integration_registry.preflight(&platform)
+    }
 }
 
 fn initialize_tracing() -> Result<()> {
@@ -202,6 +217,25 @@ impl Clock for SystemClock {
 
     fn monotonic_now(&self) -> Instant {
         Instant::now()
+    }
+}
+
+struct StaticPlatformDetector {
+    platform: DetectedPlatform,
+}
+
+impl PlatformDetector for StaticPlatformDetector {
+    fn detect(&self) -> Result<DetectedPlatform> {
+        Ok(self.platform.clone())
+    }
+}
+
+fn supported_test_platform() -> DetectedPlatform {
+    DetectedPlatform {
+        operating_system: OperatingSystem::Linux,
+        distribution: Distribution::PopOs { version: None },
+        desktop_environment: DesktopEnvironment::Cosmic,
+        terminal: TerminalCapability::tmux(PathBuf::from("tmux")),
     }
 }
 
@@ -315,7 +349,7 @@ impl ProcessRunner for UnavailableBackend {
 }
 
 impl PlatformDetector for UnavailableBackend {
-    fn detect(&self) -> Result<PlatformInfo> {
+    fn detect(&self) -> Result<DetectedPlatform> {
         Err(self.error(ErrorCategory::Platform, "platform detection"))
     }
 }

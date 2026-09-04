@@ -11,11 +11,11 @@ pub mod terminal;
 
 pub use clock::Clock;
 pub use containers::ContainerBackend;
-pub use desktop::{DesktopBackend, DesktopSnapshot};
+pub use desktop::{DesktopBackend, DesktopEnvironmentDetector, DesktopSnapshot};
 pub use editor::EditorBackend;
 pub use emulator::EmulatorBackend;
 pub use filesystem::FileSystem;
 pub use persistence::{ConfigStore, StateStore};
-pub use platform::PlatformDetector;
+pub use platform::{PlatformDetector, PlatformProbe};
 pub use process::{BoxFuture, ProcessOutput, ProcessRequest, ProcessRunner};
 pub use terminal::TerminalBackend;
