@@ -430,7 +430,7 @@ The initial action vocabulary should be capability-oriented:
 
 ```text
 Open application
-Open project
+Open Project with Zed
 Run command
 Start service
 Create or select desktop workspace
@@ -1220,20 +1220,61 @@ Use `ratatui` for the primary full-screen terminal interface. Use `dialoguer` fo
 
 `workstate add <environment>` should feel like a dynamic builder, not a rigid list of technology-specific questions.
 
-The editor should provide these conceptual areas:
+The editor uses a focused two-pane layout:
 
 ```text
-Environment identity
-Action palette
-Environment graph
-Action properties
-Workspace targets
-Dependencies
-Readiness checks
-Validation messages
-Preview
-Save confirmation
+┌─ Environment ───────────────────────────────────────────────────────────────┐
+│ Workstate  <environment name>                                                │
+├─ Actions ───────────────────────────────┬─ Inspector ────────────────────────┤
+│ <configured action>                     │ <field for selected action>       │
+│ <configured action>                     │ <contextual value>                │
+│                                        │                                    │
+└────────────────────────────────────────┴────────────────────────────────────┘
+↑↓ navigate  Enter edit  Esc back/exit  s/Ctrl+S save
 ```
+
+The header is always titled `Environment`. It shows the blue `Workstate` brand followed only by the current environment name. It must not display a second environment selector, the process working directory, or unrelated runtime diagnostics in this header.
+
+The left pane contains only the ordered list of configured actions. It does not contain a separate workspace list, a review screen, backend-specific shortcut instructions, or duplicated configuration data. The right pane is the inspector for the currently selected action.
+
+When the action list has focus, it occupies approximately 75% of the main width and the inspector occupies approximately 25%. When the inspector has focus, the action list occupies approximately 20% and the inspector occupies approximately 80%. The focused pane must have a visibly stronger border or title style while the unfocused pane remains readable.
+
+The editor has two primary focus states:
+
+- `Actions`: `Up` and `Down` move between actions. `Enter` or `Right` enters the inspector for the selected action. `Esc` exits the editor without saving.
+- `Inspector`: `Up` and `Down` move between fields generated for the selected action. `Enter` edits the selected field. `Esc` or `Left` returns to the action list without leaving the editor.
+
+`Tab` may switch between the two panes as an accessibility and efficiency shortcut, but it must not replace the documented `Enter` and `Esc` flow. The footer contains only generic controls that apply to the entire editor, such as navigation, focus changes, adding, deleting, canceling, and saving. It must not grow a list of action-specific hotkeys.
+
+Saving is available through `s` and `Ctrl+S`. Saving still validates the full configuration and requires the normal explicit confirmation before persistence. A failed validation keeps the editor open and displays the error in English. A canceled save or editor exit must preserve the previously persisted configuration byte-for-byte.
+
+The action palette is opened with `a`. It may list capability-oriented action kinds because it is the creation surface, but once an action is selected, its inspector must be generated from its `ActionKind`. A field is shown only when it has meaning for that action and is supported by the domain model. Text fields open a focused text editor on `Enter`; enumerated or resource-selection fields open a modal selector with `Up`, `Down`, `Enter`, and `Esc`. Dependency editing uses a multi-select modal with explicit toggles.
+
+The contextual field contract for the initial action kinds is:
+
+```text
+Open application          action name, application, working directory,
+                           desktop workspace, dependencies
+Open Project with Zed     action name, project path, desktop workspace,
+                           dependencies
+Run command               action name, command, working directory,
+                           execution mode, dependencies
+Start service             action name, command, working directory,
+                           execution mode, dependencies
+Create/select workspace   action name, workspace target, dependencies
+Configure tiling          action name, desktop workspace, tiling, dependencies
+Start container            action name, container, working directory, dependencies
+Start Compose              action name, Compose project, working directory,
+                           dependencies
+Start Android Emulator     action name, Android virtual device,
+                           desktop workspace, dependencies
+Wait/verify                action name, readiness, dependencies
+Custom action              action name, dependencies
+```
+
+`Open Project with Zed` is intentionally specialized. Its application is always Zed in the initial product, so the inspector must not show `Application`, `Working directory`, or `Execution mode` for this action. The project directory is configured through `Project path`, and the action may optionally target a desktop workspace.
+
+Workspace configuration is edited through the contextual workspace field of the selected action or through the `Create or select workspace` action. The inspector may offer saved workspace targets, the current workspace, a next-empty-workspace target, and a flow for linking a live COSMIC workspace. The live COSMIC picker is a modal interaction and must explain `Enter` to confirm and `Esc` to cancel. It must not reintroduce a permanent workspace pane on the editor screen.
 
 The user must be able to add resources in any useful order and configure relationships afterward. The editor must allow the user to describe flows such as:
 

@@ -11,7 +11,8 @@ pub use app::{
 };
 pub use editor::{
     ActionPaletteEntry, EditorAction, EditorField, EditorMode, EditorPanel, EditorReview,
-    EditorState, SaveOutcome, TextInput, action_palette,
+    EditorState, InspectorChoice, InspectorChoiceValue, InspectorField, InspectorPicker,
+    SaveOutcome, TextInput, action_palette,
 };
 pub use event::{
     CrosstermEventSource, CrosstermTerminalSession, EventSource, TerminalGuard, TerminalSession,

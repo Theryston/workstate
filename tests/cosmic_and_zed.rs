@@ -4,7 +4,7 @@ mod fakes;
 use std::{
     collections::VecDeque,
     error::Error,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -15,8 +15,9 @@ use workstate::{
         planner::{ActionHandler, CancellationToken, ObservationStatus},
         ports::{
             BackgroundProcess, BoxFuture, DesktopBackend, DesktopOperationOutcome, DesktopSnapshot,
-            DesktopWindowSnapshot, DesktopWorkspaceSnapshot, EditorBackend, ProcessOutput,
-            ProcessRequest, ProcessRunner, ensure_workspace, resolve_workspace_target,
+            DesktopWindowSnapshot, DesktopWorkspaceSnapshot, EditorBackend, FileSystem,
+            ProcessOutput, ProcessRequest, ProcessRunner, ensure_workspace,
+            resolve_workspace_target,
         },
     },
     domain::{
@@ -35,6 +36,67 @@ use workstate::{
 use fakes::fake_desktop::FakeDesktop;
 
 type TestResult = std::result::Result<(), Box<dyn Error>>;
+
+#[derive(Clone)]
+struct HomeOverrideFileSystem {
+    home: PathBuf,
+    local: LocalFileSystem,
+}
+
+impl HomeOverrideFileSystem {
+    fn new(home: PathBuf) -> Self {
+        Self {
+            home,
+            local: LocalFileSystem,
+        }
+    }
+}
+
+impl FileSystem for HomeOverrideFileSystem {
+    fn home_directory(&self) -> Result<PathBuf> {
+        Ok(self.home.clone())
+    }
+
+    fn exists(&self, path: &Path) -> Result<bool> {
+        self.local.exists(path)
+    }
+
+    fn is_directory(&self, path: &Path) -> Result<bool> {
+        self.local.is_directory(path)
+    }
+
+    fn create_directory_all(&self, path: &Path) -> Result<()> {
+        self.local.create_directory_all(path)
+    }
+
+    fn list_directories(&self, path: &Path) -> Result<Vec<PathBuf>> {
+        self.local.list_directories(path)
+    }
+
+    fn read(&self, path: &Path) -> Result<Vec<u8>> {
+        self.local.read(path)
+    }
+
+    fn write(&self, path: &Path, contents: &[u8]) -> Result<()> {
+        self.local.write(path, contents)
+    }
+
+    fn sync(&self, path: &Path) -> Result<()> {
+        self.local.sync(path)
+    }
+
+    fn rename(&self, source: &Path, target: &Path) -> Result<()> {
+        self.local.rename(source, target)
+    }
+
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
+        self.local.canonicalize(path)
+    }
+
+    fn remove(&self, path: &Path) -> Result<()> {
+        self.local.remove(path)
+    }
+}
 
 #[derive(Clone)]
 struct FixtureProcessRunner {
@@ -403,6 +465,39 @@ fn empty_cosmic_window_application_is_treated_as_missing() -> TestResult {
         ]"#,
     )?;
     assert_eq!(snapshot.windows[0].application, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn zed_expands_home_relative_project_paths_before_validation() -> TestResult {
+    let home = tempdir()?;
+    let file_system = HomeOverrideFileSystem::new(home.path().to_path_buf());
+    let project_path = home.path().join("Projects/blog");
+    file_system.create_directory_all(&project_path)?;
+    let desktop = FakeDesktop::new(DesktopSnapshot {
+        workspaces: vec![workspace("main", "Main", 0, true, true)],
+        windows: Vec::new(),
+    });
+    let runner = FixtureProcessRunner::for_zed_launch(desktop.clone(), project_path.clone());
+    let backend = ZedBackend::new(
+        Arc::new(runner.clone()),
+        Arc::new(desktop),
+        Arc::new(file_system),
+    )
+    .with_command(ZedCommand::new("zed-test"))
+    .with_timing(Duration::from_millis(1), Duration::from_millis(100));
+
+    let outcome = backend
+        .open_project(PathBuf::from("~/Projects/blog"), CancellationToken::new())
+        .await?;
+    assert!(outcome.owned);
+    let calls = runner.calls()?;
+    let request = calls.first().ok_or("missing Zed launch request")?;
+    assert_eq!(
+        request.arguments,
+        vec!["-n".to_owned(), project_path.display().to_string()]
+    );
+    assert_eq!(request.working_directory, Some(project_path));
     Ok(())
 }
 

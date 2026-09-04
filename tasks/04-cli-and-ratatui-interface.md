@@ -135,7 +135,7 @@ The action palette should use capability-oriented labels such as:
 
 ~~~
 Open application
-Open project
+Open Project with Zed
 Run command
 Start service
 Create or select workspace
@@ -305,4 +305,3 @@ All tests must use fake application services and temporary storage.
 - no Docker or Android startup;
 - no final reconciliation behavior;
 - no support for previous configuration formats.
-

@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::{
     application::ports::{ConfigStore, DesktopWorkspaceSnapshot, FileSystem},
@@ -22,20 +22,7 @@ pub enum EditorMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorPanel {
     Actions,
-    Workspaces,
     Inspector,
-    Review,
-}
-
-impl EditorPanel {
-    fn next(self) -> Self {
-        match self {
-            Self::Actions => Self::Workspaces,
-            Self::Workspaces => Self::Inspector,
-            Self::Inspector => Self::Review,
-            Self::Review => Self::Actions,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,10 +39,86 @@ pub enum EditorField {
     ReadinessDelay,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InspectorField {
+    ActionLabel,
+    Application,
+    ProjectPath,
+    WorkingDirectory,
+    Command,
+    ExecutionMode,
+    DesktopWorkspace,
+    WorkspaceTarget,
+    Tiling,
+    ContainerName,
+    ComposeProjectName,
+    EmulatorAvd,
+    ReadinessDelay,
+    Dependencies,
+}
+
+impl InspectorField {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ActionLabel => "Action name",
+            Self::Application => "Application",
+            Self::ProjectPath => "Project path",
+            Self::WorkingDirectory => "Working directory",
+            Self::Command => "Command",
+            Self::ExecutionMode => "Execution mode",
+            Self::DesktopWorkspace => "Desktop workspace",
+            Self::WorkspaceTarget => "Workspace target",
+            Self::Tiling => "Tiling",
+            Self::ContainerName => "Container",
+            Self::ComposeProjectName => "Compose project",
+            Self::EmulatorAvd => "Android virtual device",
+            Self::ReadinessDelay => "Readiness delay",
+            Self::Dependencies => "Depends on",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextInput {
     pub field: EditorField,
     pub value: String,
+    pub replace_on_next_char: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InspectorChoice {
+    pub label: String,
+    pub detail: Option<String>,
+    pub value: InspectorChoiceValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InspectorChoiceValue {
+    DesktopWorkspace(Option<WorkspaceId>),
+    WorkspaceTarget(Option<WorkspaceId>),
+    LinkLiveWorkspace,
+    AddNextEmptyWorkspace,
+    ExecutionMode(Option<ExecutionMode>),
+    Tiling {
+        workspace_id: WorkspaceId,
+        preference: TilingPreference,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InspectorPicker {
+    Choices {
+        field: InspectorField,
+        title: String,
+        options: Vec<InspectorChoice>,
+        selected: usize,
+    },
+    Dependencies {
+        action_id: ActionId,
+        options: Vec<ActionId>,
+        selected: usize,
+        checked: BTreeSet<ActionId>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,7 +134,7 @@ pub fn action_palette() -> Vec<ActionPaletteEntry> {
             kind: ActionKind::OpenApplication,
         },
         ActionPaletteEntry {
-            label: "Open project",
+            label: "Open Project with Zed",
             kind: ActionKind::OpenProject,
         },
         ActionPaletteEntry {
@@ -154,20 +217,26 @@ pub struct EditorState {
     pub mode: EditorMode,
     pub panel: EditorPanel,
     pub selected_action: Option<usize>,
-    pub selected_workspace: Option<usize>,
+    pub selected_inspector: Option<usize>,
     pub selected_palette: usize,
     pub palette_open: bool,
     pub delete_confirmation: bool,
     pub input: Option<TextInput>,
+    pub inspector_picker: Option<InspectorPicker>,
+    pub workspace_picker_target: Option<InspectorField>,
     pub validation_errors: Vec<String>,
     pub notice: Option<String>,
     pub dirty: bool,
 }
 
 impl EditorState {
-    pub fn new(configuration: EnvironmentConfig, mode: EditorMode) -> Self {
+    pub fn new(mut configuration: EnvironmentConfig, mode: EditorMode) -> Self {
+        for action in &mut configuration.actions {
+            if matches!(&action.kind, ActionKind::OpenProject) {
+                action.parameters.application = Some("zed".to_owned());
+            }
+        }
         let selected_action = (!configuration.actions.is_empty()).then_some(0);
-        let selected_workspace = (!configuration.workspaces.is_empty()).then_some(0);
         Self {
             configuration,
             live_workspaces: Vec::new(),
@@ -177,11 +246,13 @@ impl EditorState {
             mode,
             panel: EditorPanel::Actions,
             selected_action,
-            selected_workspace,
+            selected_inspector: selected_action.map(|_| 0),
             selected_palette: 0,
             palette_open: false,
             delete_confirmation: false,
             input: None,
+            inspector_picker: None,
+            workspace_picker_target: None,
             validation_errors: Vec::new(),
             notice: None,
             dirty: false,
@@ -219,9 +290,152 @@ impl EditorState {
             .and_then(|index| self.configuration.actions.get_mut(index))
     }
 
-    pub fn selected_workspace_spec(&self) -> Option<&WorkspaceSpec> {
-        self.selected_workspace
-            .and_then(|index| self.configuration.workspaces.get(index))
+    pub fn inspector_fields(&self) -> Vec<InspectorField> {
+        let Some(action) = self.selected_action_spec() else {
+            return Vec::new();
+        };
+
+        let mut fields = vec![InspectorField::ActionLabel];
+        match &action.kind {
+            ActionKind::OpenApplication => fields.extend([
+                InspectorField::Application,
+                InspectorField::WorkingDirectory,
+                InspectorField::DesktopWorkspace,
+            ]),
+            ActionKind::OpenProject => fields.extend([
+                InspectorField::ProjectPath,
+                InspectorField::DesktopWorkspace,
+            ]),
+            ActionKind::RunCommand | ActionKind::StartService => fields.extend([
+                InspectorField::Command,
+                InspectorField::WorkingDirectory,
+                InspectorField::ExecutionMode,
+            ]),
+            ActionKind::CreateOrSelectWorkspace => {
+                fields.push(InspectorField::WorkspaceTarget);
+            }
+            ActionKind::ConfigureTiling => {
+                fields.extend([InspectorField::DesktopWorkspace, InspectorField::Tiling]);
+            }
+            ActionKind::StartContainer => {
+                fields.extend([
+                    InspectorField::ContainerName,
+                    InspectorField::WorkingDirectory,
+                ]);
+            }
+            ActionKind::StartCompose => fields.extend([
+                InspectorField::ComposeProjectName,
+                InspectorField::WorkingDirectory,
+            ]),
+            ActionKind::StartAndroidEmulator => {
+                fields.extend([
+                    InspectorField::EmulatorAvd,
+                    InspectorField::DesktopWorkspace,
+                ]);
+            }
+            ActionKind::WaitForCondition | ActionKind::VerifyResource => {
+                fields.push(InspectorField::ReadinessDelay);
+            }
+            ActionKind::Custom { .. } => {}
+        }
+        fields.push(InspectorField::Dependencies);
+        fields
+    }
+
+    pub fn selected_inspector_field(&self) -> Option<InspectorField> {
+        self.selected_inspector
+            .and_then(|index| self.inspector_fields().get(index).copied())
+    }
+
+    pub fn inspector_field_value(&self, field: InspectorField) -> String {
+        let Some(action) = self.selected_action_spec() else {
+            return "not available".to_owned();
+        };
+        match field {
+            InspectorField::ActionLabel => action_label(action),
+            InspectorField::Application => action
+                .parameters
+                .application
+                .clone()
+                .unwrap_or_else(|| "not set".to_owned()),
+            InspectorField::ProjectPath => action
+                .parameters
+                .project_path
+                .clone()
+                .unwrap_or_else(|| "not set".to_owned()),
+            InspectorField::WorkingDirectory => action
+                .working_directory
+                .clone()
+                .unwrap_or_else(|| "not set".to_owned()),
+            InspectorField::Command => action
+                .parameters
+                .command
+                .as_ref()
+                .map(command_label)
+                .unwrap_or_else(|| "not set".to_owned()),
+            InspectorField::ExecutionMode => action
+                .execution_mode
+                .map(execution_mode_label)
+                .unwrap_or("not set")
+                .to_owned(),
+            InspectorField::DesktopWorkspace => action
+                .desktop_workspace
+                .as_ref()
+                .map(|id| self.workspace_label(id))
+                .unwrap_or_else(|| "Current workspace".to_owned()),
+            InspectorField::WorkspaceTarget => action
+                .parameters
+                .workspace_id
+                .as_ref()
+                .map(|id| self.workspace_label(id))
+                .unwrap_or_else(|| "not set".to_owned()),
+            InspectorField::Tiling => action
+                .desktop_workspace
+                .as_ref()
+                .and_then(|id| {
+                    self.configuration
+                        .workspaces
+                        .iter()
+                        .find(|workspace| &workspace.id == id)
+                })
+                .map(|workspace| tiling_label(workspace.tiling).to_owned())
+                .unwrap_or_else(|| "Select a workspace first".to_owned()),
+            InspectorField::ContainerName => action
+                .parameters
+                .container
+                .as_ref()
+                .map(|container| container.name.clone())
+                .unwrap_or_else(|| "not set".to_owned()),
+            InspectorField::ComposeProjectName => action
+                .parameters
+                .compose
+                .as_ref()
+                .and_then(|compose| compose.project_name.clone())
+                .unwrap_or_else(|| "not set".to_owned()),
+            InspectorField::EmulatorAvd => action
+                .parameters
+                .emulator
+                .as_ref()
+                .map(|emulator| emulator.avd.clone())
+                .unwrap_or_else(|| "not set".to_owned()),
+            InspectorField::ReadinessDelay => action
+                .readiness_checks
+                .first()
+                .map(readiness_label)
+                .unwrap_or_else(|| "not set".to_owned()),
+            InspectorField::Dependencies => {
+                if action.depends_on.is_empty() {
+                    "none".to_owned()
+                } else {
+                    action
+                        .depends_on
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+            }
+        }
     }
 
     pub fn add_action_from_palette(&mut self, palette_index: usize) -> Result<ActionId> {
@@ -236,11 +450,15 @@ impl EditorState {
         let mut action = ActionSpec::new(id.as_str().to_owned(), entry.kind.clone())
             .map_err(WorkstateError::from)?;
         action.display_label = Some(entry.label.to_owned());
+        if matches!(&action.kind, ActionKind::OpenProject) {
+            action.parameters.application = Some("zed".to_owned());
+        }
         self.configuration
             .add_action(action)
             .map_err(WorkstateError::from)?;
         self.selected_action = self.configuration.actions.len().checked_sub(1);
-        self.panel = EditorPanel::Inspector;
+        self.selected_inspector = Some(0);
+        self.panel = EditorPanel::Actions;
         self.palette_open = false;
         self.mark_dirty();
         Ok(id)
@@ -261,6 +479,7 @@ impl EditorState {
                 .retain(|dependency| dependency != &removed_id);
         }
         self.selected_action = selection_after_removal(self.configuration.actions.len(), index);
+        self.selected_inspector = self.selected_action.is_some().then_some(0);
         self.mark_dirty();
         Ok(removed_id)
     }
@@ -275,7 +494,6 @@ impl EditorState {
         self.configuration
             .add_workspace(workspace)
             .map_err(WorkstateError::from)?;
-        self.selected_workspace = self.configuration.workspaces.len().checked_sub(1);
         self.mark_dirty();
         Ok(workspace_id)
     }
@@ -385,10 +603,7 @@ impl EditorState {
         application: Option<String>,
     ) -> Result<()> {
         let action = self.action_mut(action_id)?;
-        if !matches!(
-            &action.kind,
-            ActionKind::OpenApplication | ActionKind::OpenProject
-        ) {
+        if !matches!(&action.kind, ActionKind::OpenApplication) {
             return Err(WorkstateError::new(
                 ErrorCategory::Ui,
                 format!("application is not available for action '{action_id}'"),
@@ -559,116 +774,6 @@ impl EditorState {
         Ok(())
     }
 
-    pub fn cycle_selected_workspace_target(&mut self) -> Result<()> {
-        let Some(index) = self.selected_workspace else {
-            return Err(WorkstateError::new(
-                ErrorCategory::Ui,
-                "no workspace is selected",
-            ));
-        };
-        let Some(workspace) = self.configuration.workspaces.get(index) else {
-            return Err(WorkstateError::new(
-                ErrorCategory::Ui,
-                "the selected workspace does not exist",
-            ));
-        };
-        let display_name = workspace
-            .name
-            .clone()
-            .unwrap_or_else(|| workspace.id.to_string());
-        let target = match &workspace.target {
-            WorkspaceTarget::Current => WorkspaceTarget::NextEmpty,
-            WorkspaceTarget::NextEmpty => WorkspaceTarget::Create {
-                name: display_name.clone(),
-            },
-            WorkspaceTarget::Create { .. } => WorkspaceTarget::Existing {
-                reference: crate::domain::WorkspaceReference::Name(display_name),
-            },
-            WorkspaceTarget::Existing { .. } => WorkspaceTarget::None,
-            WorkspaceTarget::None => WorkspaceTarget::Current,
-        };
-        let workspace_id = workspace.id.clone();
-        self.set_workspace_target(&workspace_id, target)
-    }
-
-    pub fn toggle_selected_workspace_tiling(&mut self) -> Result<()> {
-        let Some(workspace) = self.selected_workspace_spec() else {
-            return Err(WorkstateError::new(
-                ErrorCategory::Ui,
-                "no workspace is selected",
-            ));
-        };
-        let tiling = match workspace.tiling {
-            TilingPreference::Unchanged | TilingPreference::Disabled => TilingPreference::Enabled,
-            TilingPreference::Enabled => TilingPreference::Disabled,
-        };
-        let workspace_id = workspace.id.clone();
-        self.set_workspace_tiling(&workspace_id, tiling)
-    }
-
-    pub fn cycle_selected_action_workspace(&mut self) -> Result<()> {
-        let action_id = self.selected_action_id()?;
-        let current = self.action(&action_id)?.desktop_workspace.clone();
-        let mut targets = Vec::with_capacity(self.configuration.workspaces.len() + 1);
-        targets.push(None);
-        targets.extend(
-            self.configuration
-                .workspaces
-                .iter()
-                .map(|workspace| Some(workspace.id.clone())),
-        );
-        let current_index = targets
-            .iter()
-            .position(|target| target == &current)
-            .unwrap_or(0);
-        let next_index = (current_index + 1) % targets.len();
-        self.set_action_desktop_workspace(&action_id, targets[next_index].clone())
-    }
-
-    pub fn cycle_selected_action_execution_mode(&mut self) -> Result<()> {
-        let action_id = self.selected_action_id()?;
-        let mode = self.action(&action_id)?.execution_mode;
-        let next = match mode {
-            None => Some(ExecutionMode::RunOnce),
-            Some(ExecutionMode::RunOnce) => Some(ExecutionMode::Background),
-            Some(ExecutionMode::Background) => None,
-        };
-        self.set_action_execution_mode(&action_id, next)
-    }
-
-    pub fn add_dependency_to_selected_action(&mut self) -> Result<()> {
-        let action_id = self.selected_action_id()?;
-        let Some(dependency_id) = self
-            .configuration
-            .actions
-            .iter()
-            .find(|action| {
-                action.id != action_id
-                    && !self
-                        .action(&action_id)
-                        .is_ok_and(|selected| selected.depends_on.contains(&action.id))
-            })
-            .map(|action| action.id.clone())
-        else {
-            return Err(WorkstateError::new(
-                ErrorCategory::Ui,
-                "no available action can be added as a dependency",
-            ));
-        };
-        self.add_dependency(&action_id, &dependency_id)
-    }
-
-    pub fn remove_last_dependency_from_selected_action(&mut self) -> Result<()> {
-        let action_id = self.selected_action_id()?;
-        let Some(dependency_id) = self.action(&action_id)?.depends_on.last().cloned() else {
-            return Err(WorkstateError::new(
-                ErrorCategory::Ui,
-                "the selected action has no dependencies",
-            ));
-        };
-        self.remove_dependency(&action_id, &dependency_id)
-    }
-
     pub fn add_dependency(&mut self, action_id: &ActionId, dependency_id: &ActionId) -> Result<()> {
         if action_id == dependency_id {
             return Err(WorkstateError::new(
@@ -793,17 +898,24 @@ impl EditorState {
     }
 
     pub fn handle_key(&mut self, key: KeyCode) -> EditorAction {
+        self.handle_key_event(KeyEvent::new(key, KeyModifiers::NONE))
+    }
+
+    pub fn handle_key_event(&mut self, key: KeyEvent) -> EditorAction {
         if self.workspace_picker_open {
-            return self.handle_workspace_picker_key(key);
+            return self.handle_workspace_picker_key(key.code);
+        }
+        if self.inspector_picker.is_some() {
+            return self.handle_inspector_picker_key(key.code);
         }
         if self.input.is_some() {
-            return self.handle_input_key(key);
+            return self.handle_input_key(key.code);
         }
         if self.palette_open {
-            return self.handle_palette_key(key);
+            return self.handle_palette_key(key.code);
         }
         if self.delete_confirmation {
-            return match key {
+            return match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     self.delete_confirmation = false;
                     if let Some(index) = self.selected_action
@@ -821,9 +933,16 @@ impl EditorState {
             };
         }
 
-        match key {
+        if is_save_shortcut(key) {
+            return EditorAction::SaveRequested;
+        }
+
+        match key.code {
             KeyCode::Tab => {
-                self.panel = self.panel.next();
+                self.panel = match self.panel {
+                    EditorPanel::Actions => EditorPanel::Inspector,
+                    EditorPanel::Inspector => EditorPanel::Actions,
+                };
                 EditorAction::None
             }
             KeyCode::Up => {
@@ -835,157 +954,395 @@ impl EditorState {
                 EditorAction::None
             }
             KeyCode::Char('a') => {
+                self.selected_palette = 0;
                 self.palette_open = true;
                 EditorAction::PaletteOpened
             }
-            KeyCode::Char('n') if self.panel == EditorPanel::Workspaces => {
-                let result = self.next_workspace_id().and_then(|id| {
-                    self.add_workspace(id.as_str(), WorkspaceTarget::NextEmpty)
-                        .map(|_| ())
-                });
-                self.record_error(result);
-                EditorAction::None
-            }
-            KeyCode::Enter | KeyCode::Char('l') if self.panel == EditorPanel::Workspaces => {
-                self.open_workspace_picker();
-                EditorAction::None
-            }
-            KeyCode::Char('t') if self.panel == EditorPanel::Workspaces => {
-                let result = self.cycle_selected_workspace_target();
-                self.record_error(result);
-                EditorAction::None
-            }
-            KeyCode::Char('i') if self.panel == EditorPanel::Workspaces => {
-                let result = self.toggle_selected_workspace_tiling();
-                self.record_error(result);
-                EditorAction::None
-            }
-            KeyCode::Char('e') => {
-                self.begin_default_input();
-                EditorAction::None
-            }
-            KeyCode::Char('w') if self.selected_action.is_some() => {
-                self.begin_input(EditorField::WorkingDirectory);
-                EditorAction::None
-            }
-            KeyCode::Char('o')
-                if self.selected_action_spec().is_some_and(|action| {
-                    matches!(
-                        &action.kind,
-                        ActionKind::OpenApplication | ActionKind::OpenProject
-                    )
-                }) =>
-            {
-                self.begin_input(EditorField::Application);
-                EditorAction::None
-            }
-            KeyCode::Char('p')
-                if self
-                    .selected_action_spec()
-                    .is_some_and(|action| matches!(&action.kind, ActionKind::OpenProject)) =>
-            {
-                self.begin_input(EditorField::ProjectPath);
-                EditorAction::None
-            }
-            KeyCode::Char('c')
-                if self.selected_action_spec().is_some_and(|action| {
-                    matches!(
-                        &action.kind,
-                        ActionKind::RunCommand | ActionKind::StartService
-                    )
-                }) =>
-            {
-                self.begin_input(EditorField::CommandProgram);
-                EditorAction::None
-            }
-            KeyCode::Char('v')
-                if self.selected_action_spec().is_some_and(|action| {
-                    matches!(
-                        &action.kind,
-                        ActionKind::StartContainer
-                            | ActionKind::StartCompose
-                            | ActionKind::StartAndroidEmulator
-                    )
-                }) =>
-            {
-                let field = match self.selected_action_spec().map(|action| &action.kind) {
-                    Some(ActionKind::StartContainer) => EditorField::ContainerName,
-                    Some(ActionKind::StartCompose) => EditorField::ComposeProjectName,
-                    Some(ActionKind::StartAndroidEmulator) => EditorField::EmulatorAvd,
-                    _ => EditorField::ActionDisplayLabel,
-                };
-                self.begin_input(field);
-                EditorAction::None
-            }
-            KeyCode::Char('r')
-                if self.selected_action_spec().is_some_and(|action| {
-                    matches!(
-                        &action.kind,
-                        ActionKind::WaitForCondition | ActionKind::VerifyResource
-                    )
-                }) =>
-            {
-                self.begin_input(EditorField::ReadinessDelay);
-                EditorAction::None
-            }
-            KeyCode::Char('x')
-                if self.selected_action_spec().is_some_and(|action| {
-                    matches!(&action.kind, ActionKind::CreateOrSelectWorkspace)
-                }) =>
-            {
-                let workspace_id = self
-                    .selected_workspace_spec()
-                    .map(|workspace| workspace.id.clone());
-                let action_id = self.selected_action_id();
-                if let Ok(action_id) = action_id {
-                    let result = self.set_action_workspace_parameter(&action_id, workspace_id);
-                    self.record_error(result);
+            KeyCode::Enter | KeyCode::Right if self.panel == EditorPanel::Actions => {
+                if self.selected_action.is_some() {
+                    self.panel = EditorPanel::Inspector;
+                    self.normalize_inspector_selection();
+                } else {
+                    self.notice = Some("Add an action before opening the inspector.".to_owned());
                 }
                 EditorAction::None
             }
-            KeyCode::Char('m')
-                if self.selected_action_spec().is_some_and(|action| {
-                    matches!(
-                        &action.kind,
-                        ActionKind::RunCommand | ActionKind::StartService
-                    )
-                }) =>
-            {
-                let result = self.cycle_selected_action_execution_mode();
-                self.record_error(result);
-                EditorAction::None
-            }
-            KeyCode::Char('g') if self.selected_action.is_some() => {
-                let result = self.cycle_selected_action_workspace();
-                self.record_error(result);
-                EditorAction::None
-            }
-            KeyCode::Char('+') if self.selected_action.is_some() => {
-                let result = self.add_dependency_to_selected_action();
-                self.record_error(result);
-                EditorAction::None
-            }
-            KeyCode::Char('-') if self.selected_action.is_some() => {
-                let result = self.remove_last_dependency_from_selected_action();
-                self.record_error(result);
-                EditorAction::None
-            }
-            KeyCode::Char('d')
-                if matches!(
-                    self.panel,
-                    EditorPanel::Actions | EditorPanel::Inspector | EditorPanel::Review
-                ) && self.selected_action.is_some() =>
-            {
+            KeyCode::Enter => match self.panel {
+                EditorPanel::Actions => {
+                    if self.selected_action.is_some() {
+                        self.panel = EditorPanel::Inspector;
+                        self.normalize_inspector_selection();
+                    } else {
+                        self.notice =
+                            Some("Add an action before opening the inspector.".to_owned());
+                    }
+                    EditorAction::None
+                }
+                EditorPanel::Inspector => {
+                    self.activate_selected_inspector_field();
+                    EditorAction::None
+                }
+            },
+            KeyCode::Char('d') if self.selected_action.is_some() => {
                 self.delete_confirmation = true;
                 EditorAction::None
             }
-            KeyCode::Char('s') => {
-                self.panel = EditorPanel::Review;
-                EditorAction::SaveRequested
+            KeyCode::Esc | KeyCode::Left if self.panel == EditorPanel::Inspector => {
+                self.panel = EditorPanel::Actions;
+                EditorAction::None
             }
-            KeyCode::Enter if self.panel == EditorPanel::Review => EditorAction::SaveRequested,
-            KeyCode::Esc | KeyCode::Char('q') => EditorAction::CancelRequested,
+            KeyCode::Esc => match self.panel {
+                EditorPanel::Actions => EditorAction::CancelRequested,
+                EditorPanel::Inspector => {
+                    self.panel = EditorPanel::Actions;
+                    EditorAction::None
+                }
+            },
+            KeyCode::Char('q') => EditorAction::CancelRequested,
             _ => EditorAction::None,
+        }
+    }
+
+    fn activate_selected_inspector_field(&mut self) {
+        let Some(field) = self.selected_inspector_field() else {
+            self.notice = Some("No editable fields are available for this action.".to_owned());
+            return;
+        };
+        match field {
+            InspectorField::ActionLabel => self.begin_input(EditorField::ActionDisplayLabel),
+            InspectorField::Application => self.begin_input(EditorField::Application),
+            InspectorField::ProjectPath => self.begin_input(EditorField::ProjectPath),
+            InspectorField::WorkingDirectory => self.begin_input(EditorField::WorkingDirectory),
+            InspectorField::Command => self.begin_input(EditorField::CommandProgram),
+            InspectorField::ContainerName => self.begin_input(EditorField::ContainerName),
+            InspectorField::ComposeProjectName => self.begin_input(EditorField::ComposeProjectName),
+            InspectorField::EmulatorAvd => self.begin_input(EditorField::EmulatorAvd),
+            InspectorField::ReadinessDelay => self.begin_input(EditorField::ReadinessDelay),
+            InspectorField::DesktopWorkspace | InspectorField::WorkspaceTarget => {
+                self.open_workspace_choice_picker(field)
+            }
+            InspectorField::ExecutionMode => self.open_execution_mode_picker(),
+            InspectorField::Tiling => self.open_tiling_picker(),
+            InspectorField::Dependencies => self.open_dependency_picker(),
+        }
+    }
+
+    fn open_workspace_choice_picker(&mut self, field: InspectorField) {
+        let current = self.selected_action_spec().and_then(|action| match field {
+            InspectorField::DesktopWorkspace => action.desktop_workspace.clone(),
+            InspectorField::WorkspaceTarget => action.parameters.workspace_id.clone(),
+            _ => None,
+        });
+        let mut options = Vec::with_capacity(self.configuration.workspaces.len() + 3);
+        let current_label = match field {
+            InspectorField::DesktopWorkspace => "Current workspace",
+            InspectorField::WorkspaceTarget => "No workspace selected",
+            _ => "Not available",
+        };
+        let current_value = match field {
+            InspectorField::DesktopWorkspace => InspectorChoiceValue::DesktopWorkspace(None),
+            InspectorField::WorkspaceTarget => InspectorChoiceValue::WorkspaceTarget(None),
+            _ => return,
+        };
+        options.push(InspectorChoice {
+            label: current_label.to_owned(),
+            detail: None,
+            value: current_value,
+        });
+        for workspace in &self.configuration.workspaces {
+            let value = match field {
+                InspectorField::DesktopWorkspace => {
+                    InspectorChoiceValue::DesktopWorkspace(Some(workspace.id.clone()))
+                }
+                InspectorField::WorkspaceTarget => {
+                    InspectorChoiceValue::WorkspaceTarget(Some(workspace.id.clone()))
+                }
+                _ => return,
+            };
+            options.push(InspectorChoice {
+                label: self.workspace_label(&workspace.id),
+                detail: Some(workspace_target_label(workspace)),
+                value,
+            });
+        }
+        options.push(InspectorChoice {
+            label: "Link live COSMIC workspace...".to_owned(),
+            detail: Some("Choose an existing workspace from the current session".to_owned()),
+            value: InspectorChoiceValue::LinkLiveWorkspace,
+        });
+        options.push(InspectorChoice {
+            label: "Add next empty workspace".to_owned(),
+            detail: Some("Create a saved target resolved during execution".to_owned()),
+            value: InspectorChoiceValue::AddNextEmptyWorkspace,
+        });
+        let selected = options
+            .iter()
+            .position(|option| match (&option.value, &current) {
+                (InspectorChoiceValue::DesktopWorkspace(value), current)
+                    if field == InspectorField::DesktopWorkspace =>
+                {
+                    value == current
+                }
+                (InspectorChoiceValue::WorkspaceTarget(value), current)
+                    if field == InspectorField::WorkspaceTarget =>
+                {
+                    value == current
+                }
+                _ => false,
+            })
+            .unwrap_or(0);
+        self.inspector_picker = Some(InspectorPicker::Choices {
+            field,
+            title: field.label().to_owned(),
+            options,
+            selected,
+        });
+    }
+
+    fn open_execution_mode_picker(&mut self) {
+        let current = self
+            .selected_action_spec()
+            .and_then(|action| action.execution_mode);
+        let options = vec![
+            InspectorChoice {
+                label: "Run once".to_owned(),
+                detail: Some("Complete during environment setup".to_owned()),
+                value: InspectorChoiceValue::ExecutionMode(Some(ExecutionMode::RunOnce)),
+            },
+            InspectorChoice {
+                label: "Background".to_owned(),
+                detail: Some("Keep running after Workstate exits".to_owned()),
+                value: InspectorChoiceValue::ExecutionMode(Some(ExecutionMode::Background)),
+            },
+            InspectorChoice {
+                label: "Not set".to_owned(),
+                detail: Some("Leave the action unconfigured".to_owned()),
+                value: InspectorChoiceValue::ExecutionMode(None),
+            },
+        ];
+        let selected = options
+            .iter()
+            .position(|option| {
+                matches!(&option.value, InspectorChoiceValue::ExecutionMode(value) if value == &current)
+            })
+            .unwrap_or(0);
+        self.inspector_picker = Some(InspectorPicker::Choices {
+            field: InspectorField::ExecutionMode,
+            title: "Execution mode".to_owned(),
+            options,
+            selected,
+        });
+    }
+
+    fn open_tiling_picker(&mut self) {
+        let Some(workspace_id) = self
+            .selected_action_spec()
+            .and_then(|action| action.desktop_workspace.clone())
+        else {
+            self.notice = Some("Select a desktop workspace before editing tiling.".to_owned());
+            return;
+        };
+        let current = self
+            .configuration
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == workspace_id)
+            .map(|workspace| workspace.tiling)
+            .unwrap_or(TilingPreference::Unchanged);
+        let options = [
+            TilingPreference::Unchanged,
+            TilingPreference::Enabled,
+            TilingPreference::Disabled,
+        ]
+        .into_iter()
+        .map(|preference| InspectorChoice {
+            label: tiling_label(preference).to_owned(),
+            detail: Some("Workspace setting".to_owned()),
+            value: InspectorChoiceValue::Tiling {
+                workspace_id: workspace_id.clone(),
+                preference,
+            },
+        })
+        .collect::<Vec<_>>();
+        let selected = options
+            .iter()
+            .position(|option| {
+                matches!(&option.value, InspectorChoiceValue::Tiling { preference, .. } if preference == &current)
+            })
+            .unwrap_or(0);
+        self.inspector_picker = Some(InspectorPicker::Choices {
+            field: InspectorField::Tiling,
+            title: "Tiling preference".to_owned(),
+            options,
+            selected,
+        });
+    }
+
+    fn open_dependency_picker(&mut self) {
+        let Some(action) = self.selected_action_spec() else {
+            self.notice = Some("Select an action before editing dependencies.".to_owned());
+            return;
+        };
+        let action_id = action.id.clone();
+        let checked = action.depends_on.iter().cloned().collect::<BTreeSet<_>>();
+        let options = self
+            .configuration
+            .actions
+            .iter()
+            .filter(|candidate| candidate.id != action_id)
+            .map(|candidate| candidate.id.clone())
+            .collect::<Vec<_>>();
+        self.inspector_picker = Some(InspectorPicker::Dependencies {
+            action_id,
+            options,
+            selected: 0,
+            checked,
+        });
+    }
+
+    fn handle_inspector_picker_key(&mut self, key: KeyCode) -> EditorAction {
+        match key {
+            KeyCode::Up => self.move_picker_selection(-1),
+            KeyCode::Down => self.move_picker_selection(1),
+            KeyCode::Char(' ') => self.toggle_picker_dependency(),
+            KeyCode::Enter => self.confirm_inspector_picker(),
+            KeyCode::Esc => self.inspector_picker = None,
+            _ => {}
+        }
+        EditorAction::None
+    }
+
+    fn move_picker_selection(&mut self, offset: isize) {
+        let Some(picker) = self.inspector_picker.as_mut() else {
+            return;
+        };
+        let (selected, length) = match picker {
+            InspectorPicker::Choices {
+                selected, options, ..
+            } => (selected, options.len()),
+            InspectorPicker::Dependencies {
+                selected, options, ..
+            } => (selected, options.len()),
+        };
+        if length > 0 {
+            *selected = ((*selected as isize + offset).rem_euclid(length as isize)) as usize;
+        }
+    }
+
+    fn toggle_picker_dependency(&mut self) {
+        let Some(InspectorPicker::Dependencies {
+            options,
+            selected,
+            checked,
+            ..
+        }) = self.inspector_picker.as_mut()
+        else {
+            return;
+        };
+        let Some(action_id) = options.get(*selected).cloned() else {
+            return;
+        };
+        if !checked.insert(action_id.clone()) {
+            checked.remove(&action_id);
+        }
+    }
+
+    fn confirm_inspector_picker(&mut self) {
+        let Some(picker) = self.inspector_picker.take() else {
+            return;
+        };
+        match picker {
+            InspectorPicker::Choices {
+                field,
+                options,
+                selected,
+                ..
+            } => {
+                let Some(choice) = options.get(selected).cloned() else {
+                    return;
+                };
+                match choice.value {
+                    InspectorChoiceValue::DesktopWorkspace(workspace_id) => {
+                        let result = self.set_selected_action_workspace_field(field, workspace_id);
+                        self.record_error(result);
+                    }
+                    InspectorChoiceValue::WorkspaceTarget(workspace_id) => {
+                        let result = self.set_selected_action_workspace_field(field, workspace_id);
+                        self.record_error(result);
+                    }
+                    InspectorChoiceValue::LinkLiveWorkspace => {
+                        self.workspace_picker_target = Some(field);
+                        self.open_workspace_picker();
+                    }
+                    InspectorChoiceValue::AddNextEmptyWorkspace => {
+                        let result = self.next_workspace_id().and_then(|id| {
+                            self.add_workspace(id.as_str(), WorkspaceTarget::NextEmpty)
+                        });
+                        match result {
+                            Ok(workspace_id) => {
+                                let result = self
+                                    .set_selected_action_workspace_field(field, Some(workspace_id));
+                                self.record_error(result);
+                            }
+                            Err(error) => self.validation_errors.push(error.to_string()),
+                        }
+                    }
+                    InspectorChoiceValue::ExecutionMode(mode) => {
+                        let result = self
+                            .selected_action_id()
+                            .and_then(|action_id| self.set_action_execution_mode(&action_id, mode));
+                        self.record_error(result);
+                    }
+                    InspectorChoiceValue::Tiling {
+                        workspace_id,
+                        preference,
+                    } => {
+                        let result = self.set_workspace_tiling(&workspace_id, preference);
+                        self.record_error(result);
+                    }
+                }
+            }
+            InspectorPicker::Dependencies {
+                action_id,
+                options,
+                checked,
+                ..
+            } => {
+                let dependencies = options
+                    .into_iter()
+                    .filter(|action_id| checked.contains(action_id))
+                    .collect::<Vec<_>>();
+                let result = self.action_mut(&action_id).map(|action| {
+                    action.depends_on = dependencies;
+                });
+                if result.is_ok() {
+                    self.mark_dirty();
+                }
+                self.record_error(result.map(|_| ()));
+            }
+        }
+    }
+
+    fn set_selected_action_workspace_field(
+        &mut self,
+        field: InspectorField,
+        workspace_id: Option<WorkspaceId>,
+    ) -> Result<()> {
+        let action_id = self.selected_action_id()?;
+        match field {
+            InspectorField::DesktopWorkspace => {
+                self.set_action_desktop_workspace(&action_id, workspace_id)
+            }
+            InspectorField::WorkspaceTarget => {
+                self.set_action_workspace_parameter(&action_id, workspace_id)
+            }
+            _ => Err(WorkstateError::new(
+                ErrorCategory::Ui,
+                format!(
+                    "workspace selection is not available for field '{}'.",
+                    field.label()
+                ),
+            )),
         }
     }
 
@@ -1020,8 +1377,15 @@ impl EditorState {
             return EditorAction::None;
         };
         match key {
-            KeyCode::Char(character) => input.value.push(character),
+            KeyCode::Char(character) => {
+                if input.replace_on_next_char {
+                    input.value.clear();
+                    input.replace_on_next_char = false;
+                }
+                input.value.push(character);
+            }
             KeyCode::Backspace => {
+                input.replace_on_next_char = false;
                 input.value.pop();
             }
             KeyCode::Enter => {
@@ -1172,40 +1536,36 @@ impl EditorState {
                 })
                 .unwrap_or_default(),
         };
-        self.input = Some(TextInput { field, value });
-    }
-
-    fn begin_default_input(&mut self) {
-        let field = match self.panel {
-            EditorPanel::Actions | EditorPanel::Inspector => {
-                if self.selected_action.is_some() {
-                    EditorField::ActionDisplayLabel
-                } else {
-                    EditorField::EnvironmentName
-                }
-            }
-            EditorPanel::Workspaces | EditorPanel::Review => EditorField::EnvironmentName,
-        };
-        self.begin_input(field);
+        self.input = Some(TextInput {
+            field,
+            value,
+            replace_on_next_char: true,
+        });
     }
 
     fn move_selection(&mut self, offset: isize) {
         match self.panel {
-            EditorPanel::Actions | EditorPanel::Inspector | EditorPanel::Review => {
+            EditorPanel::Actions => {
                 self.selected_action = move_index(
                     self.selected_action,
                     self.configuration.actions.len(),
                     offset,
                 );
+                self.selected_inspector = self.selected_action.is_some().then_some(0);
             }
-            EditorPanel::Workspaces => {
-                self.selected_workspace = move_index(
-                    self.selected_workspace,
-                    self.configuration.workspaces.len(),
+            EditorPanel::Inspector => {
+                self.selected_inspector = move_index(
+                    self.selected_inspector,
+                    self.inspector_fields().len(),
                     offset,
                 );
             }
         }
+    }
+
+    fn normalize_inspector_selection(&mut self) {
+        self.selected_inspector =
+            move_index(self.selected_inspector, self.inspector_fields().len(), 0);
     }
 
     fn next_action_id(&self, kind: &ActionKind) -> Result<ActionId> {
@@ -1349,6 +1709,7 @@ impl EditorState {
 
     fn open_workspace_picker(&mut self) {
         if self.live_workspaces.is_empty() {
+            self.workspace_picker_target = None;
             self.validation_errors.push(
                 "No live desktop workspaces are available to link from the current session."
                     .to_owned(),
@@ -1372,10 +1733,25 @@ impl EditorState {
                     move_index(self.selected_live_workspace, self.live_workspaces.len(), 1);
             }
             KeyCode::Enter => {
-                let result = self.link_selected_live_workspace();
+                let target = self.workspace_picker_target;
+                let result = self
+                    .link_selected_live_workspace()
+                    .and_then(|workspace_id| {
+                        if let Some(field) = target {
+                            self.set_selected_action_workspace_field(field, Some(workspace_id))
+                        } else {
+                            Ok(())
+                        }
+                    });
                 match result {
-                    Ok(()) => self.workspace_picker_open = false,
-                    Err(error) => self.validation_errors.push(error.to_string()),
+                    Ok(()) => {
+                        self.workspace_picker_target = None;
+                        self.workspace_picker_open = false;
+                    }
+                    Err(error) => {
+                        self.workspace_picker_target = target;
+                        self.validation_errors.push(error.to_string());
+                    }
                 }
             }
             KeyCode::Esc | KeyCode::Char('q') => self.workspace_picker_open = false,
@@ -1384,7 +1760,7 @@ impl EditorState {
         EditorAction::None
     }
 
-    fn link_selected_live_workspace(&mut self) -> Result<()> {
+    fn link_selected_live_workspace(&mut self) -> Result<WorkspaceId> {
         let index = self.selected_live_workspace.ok_or_else(|| {
             WorkstateError::new(ErrorCategory::Ui, "no live desktop workspace is selected")
         })?;
@@ -1438,9 +1814,8 @@ impl EditorState {
         self.configuration
             .add_workspace(specification)
             .map_err(WorkstateError::from)?;
-        self.selected_workspace = self.configuration.workspaces.len().checked_sub(1);
         self.mark_dirty();
-        Ok(())
+        Ok(workspace_id)
     }
 
     fn record_error(&mut self, result: Result<()>) {
@@ -1448,6 +1823,106 @@ impl EditorState {
             self.validation_errors.push(error.to_string());
         }
     }
+
+    fn workspace_label(&self, workspace_id: &WorkspaceId) -> String {
+        self.configuration
+            .workspaces
+            .iter()
+            .find(|workspace| &workspace.id == workspace_id)
+            .map(|workspace| {
+                workspace
+                    .name
+                    .as_ref()
+                    .map(|name| format!("{name} ({})", workspace.id))
+                    .unwrap_or_else(|| workspace.id.to_string())
+            })
+            .unwrap_or_else(|| workspace_id.to_string())
+    }
+}
+
+fn action_label(action: &ActionSpec) -> String {
+    if let Some(label) = &action.display_label {
+        return label.clone();
+    }
+    match &action.kind {
+        ActionKind::OpenApplication => "Open application".to_owned(),
+        ActionKind::OpenProject => "Open Project with Zed".to_owned(),
+        ActionKind::RunCommand => "Run command".to_owned(),
+        ActionKind::StartService => "Start service".to_owned(),
+        ActionKind::CreateOrSelectWorkspace => "Create or select workspace".to_owned(),
+        ActionKind::ConfigureTiling => "Configure tiling".to_owned(),
+        ActionKind::StartContainer => "Start Docker container".to_owned(),
+        ActionKind::StartCompose => "Start Docker Compose stack".to_owned(),
+        ActionKind::StartAndroidEmulator => "Start Android Emulator".to_owned(),
+        ActionKind::WaitForCondition => "Wait for condition".to_owned(),
+        ActionKind::VerifyResource => "Verify resource".to_owned(),
+        ActionKind::Custom { name } => format!("Custom action: {name}"),
+    }
+}
+
+fn command_label(command: &CommandSpec) -> String {
+    if command.arguments.is_empty() {
+        command.program.clone()
+    } else {
+        format!("{} {}", command.program, command.arguments.join(" "))
+    }
+}
+
+fn readiness_label(check: &ReadinessCheck) -> String {
+    match check {
+        ReadinessCheck::None => "none".to_owned(),
+        ReadinessCheck::Tcp { host, port, .. } => format!("TCP {host}:{port}"),
+        ReadinessCheck::Http { url, .. } => format!("HTTP {url}"),
+        ReadinessCheck::Command { command, .. } => format!("command {}", command_label(command)),
+        ReadinessCheck::Delay { milliseconds } => format!("{milliseconds} ms"),
+        ReadinessCheck::Container { name, .. } => format!("container {name}"),
+        ReadinessCheck::Compose { services, .. } => {
+            if services.is_empty() {
+                "Compose services".to_owned()
+            } else {
+                format!("Compose {}", services.join(", "))
+            }
+        }
+    }
+}
+
+fn workspace_target_label(workspace: &WorkspaceSpec) -> String {
+    match &workspace.target {
+        WorkspaceTarget::Current => "current".to_owned(),
+        WorkspaceTarget::Existing { reference } => match reference {
+            crate::domain::WorkspaceReference::Name(name) => format!("existing {name}"),
+            crate::domain::WorkspaceReference::Identifier(identifier) => {
+                format!("existing #{identifier}")
+            }
+        },
+        WorkspaceTarget::NextEmpty => "next empty".to_owned(),
+        WorkspaceTarget::Create { name } => format!("create {name}"),
+        WorkspaceTarget::None => "no movement".to_owned(),
+    }
+}
+
+fn tiling_label(tiling: TilingPreference) -> &'static str {
+    match tiling {
+        TilingPreference::Unchanged => "unchanged",
+        TilingPreference::Enabled => "enabled",
+        TilingPreference::Disabled => "disabled",
+    }
+}
+
+fn execution_mode_label(mode: ExecutionMode) -> &'static str {
+    match mode {
+        ExecutionMode::RunOnce => "run once",
+        ExecutionMode::Background => "background",
+    }
+}
+
+fn is_save_shortcut(key: KeyEvent) -> bool {
+    if !matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S')) {
+        return false;
+    }
+    key.modifiers == KeyModifiers::NONE
+        || key.modifiers == KeyModifiers::SHIFT
+        || key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
 fn move_index(current: Option<usize>, length: usize, offset: isize) -> Option<usize> {
@@ -1468,11 +1943,14 @@ fn selection_after_removal(length: usize, removed: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use crossterm::event::KeyCode;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use crate::{
         application::ports::DesktopWorkspaceSnapshot,
-        domain::{ActionKind, EnvironmentConfig, ExecutionMode, TilingPreference, WorkspaceTarget},
+        domain::{
+            ActionKind, ActionSpec, EnvironmentConfig, ExecutionMode, TilingPreference,
+            WorkspaceTarget,
+        },
         infrastructure::filesystem::local::LocalFileSystem,
     };
 
@@ -1482,7 +1960,11 @@ mod tests {
     fn palette_contains_the_capability_oriented_mvp_actions() {
         let palette = action_palette();
         assert_eq!(palette.len(), 12);
-        assert!(palette.iter().any(|entry| entry.label == "Open project"));
+        assert!(
+            palette
+                .iter()
+                .any(|entry| entry.label == "Open Project with Zed")
+        );
         assert!(
             palette
                 .iter()
@@ -1598,7 +2080,7 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_editor_exposes_paths_modes_workspaces_and_dependencies() {
+    fn keyboard_editor_uses_contextual_fields_and_generic_navigation() {
         let Some(configuration) = EnvironmentConfig::new("Blog").ok() else {
             return;
         };
@@ -1608,10 +2090,25 @@ mod tests {
         let second = editor.add_action_from_palette(2);
         assert!(second.is_ok());
 
+        assert_eq!(editor.panel, EditorPanel::Actions);
         assert_eq!(
-            editor.handle_key(KeyCode::Char('c')),
-            super::EditorAction::None
+            editor.inspector_fields(),
+            vec![
+                super::InspectorField::ActionLabel,
+                super::InspectorField::Command,
+                super::InspectorField::WorkingDirectory,
+                super::InspectorField::ExecutionMode,
+                super::InspectorField::Dependencies,
+            ]
         );
+        editor.handle_key(KeyCode::Enter);
+        assert_eq!(editor.panel, EditorPanel::Inspector);
+        assert_eq!(editor.handle_key(KeyCode::Down), super::EditorAction::None);
+        assert_eq!(
+            editor.selected_inspector_field(),
+            Some(super::InspectorField::Command)
+        );
+        editor.handle_key(KeyCode::Enter);
         assert_eq!(
             editor.input.as_ref().map(|input| input.field),
             Some(super::EditorField::CommandProgram)
@@ -1625,51 +2122,38 @@ mod tests {
                 .map(|command| command.program.as_str()),
             Some("b")
         );
-        assert_eq!(
-            editor.handle_key(KeyCode::Char('m')),
-            super::EditorAction::None
-        );
+        editor.handle_key(KeyCode::Down);
+        editor.handle_key(KeyCode::Down);
+        editor.handle_key(KeyCode::Enter);
+        editor.handle_key(KeyCode::Up);
+        editor.handle_key(KeyCode::Up);
+        editor.handle_key(KeyCode::Enter);
         assert_eq!(
             editor
                 .selected_action_spec()
                 .and_then(|action| action.execution_mode),
             Some(ExecutionMode::RunOnce)
         );
+        editor.handle_key(KeyCode::Down);
         assert_eq!(
-            editor.handle_key(KeyCode::Char('+')),
-            super::EditorAction::None
+            editor.selected_inspector_field(),
+            Some(super::InspectorField::Dependencies)
         );
+        editor.handle_key(KeyCode::Enter);
+        editor.handle_key(KeyCode::Char(' '));
+        editor.handle_key(KeyCode::Enter);
         assert_eq!(
             editor
                 .selected_action_spec()
                 .map(|action| action.depends_on.len()),
             Some(1)
         );
-
-        editor.handle_key(KeyCode::Tab);
-        editor.handle_key(KeyCode::Tab);
-        editor.handle_key(KeyCode::Tab);
-        assert_eq!(editor.panel, EditorPanel::Workspaces);
-        editor.handle_key(KeyCode::Char('n'));
-        assert_eq!(editor.configuration.workspaces.len(), 1);
-        editor.handle_key(KeyCode::Char('t'));
-        assert!(matches!(
-            editor
-                .selected_workspace_spec()
-                .map(|workspace| &workspace.target),
-            Some(WorkspaceTarget::Create { .. })
-        ));
-        editor.handle_key(KeyCode::Char('i'));
-        assert_eq!(
-            editor
-                .selected_workspace_spec()
-                .map(|workspace| workspace.tiling),
-            Some(TilingPreference::Enabled)
-        );
+        assert_eq!(editor.handle_key(KeyCode::Esc), super::EditorAction::None);
+        assert_eq!(editor.panel, EditorPanel::Actions);
     }
 
     #[test]
-    fn live_workspaces_can_be_linked_without_persisting_the_catalog() {
+    fn contextual_workspace_field_links_and_assigns_a_live_workspace() {
         let Some(configuration) = EnvironmentConfig::new("Blog").ok() else {
             return;
         };
@@ -1680,16 +2164,34 @@ mod tests {
             focused: false,
             tiling_enabled: Some(true),
         };
+        let Some(action) = ActionSpec::new("open-project", ActionKind::OpenProject).ok() else {
+            return;
+        };
+        let mut configuration = configuration;
+        assert!(configuration.add_action(action).is_ok());
         let mut editor = EditorState::new(configuration, EditorMode::Create)
             .with_live_workspaces(vec![workspace]);
-        editor.panel = EditorPanel::Workspaces;
-
-        assert_eq!(editor.configuration.workspaces.len(), 0);
-        assert_eq!(editor.handle_key(KeyCode::Enter), super::EditorAction::None);
+        editor.handle_key(KeyCode::Enter);
+        editor.handle_key(KeyCode::Down);
+        editor.handle_key(KeyCode::Down);
+        editor.handle_key(KeyCode::Enter);
+        assert!(editor.inspector_picker.is_some());
+        editor.handle_key(KeyCode::Down);
+        editor.handle_key(KeyCode::Enter);
         assert!(editor.workspace_picker_open);
         assert_eq!(editor.handle_key(KeyCode::Enter), super::EditorAction::None);
         assert!(!editor.workspace_picker_open);
         assert_eq!(editor.configuration.workspaces.len(), 1);
+        assert_eq!(
+            editor
+                .selected_action_spec()
+                .and_then(|action| action.desktop_workspace.clone()),
+            editor
+                .configuration
+                .workspaces
+                .first()
+                .map(|workspace| workspace.id.clone())
+        );
         assert_eq!(
             editor.configuration.workspaces[0].target,
             WorkspaceTarget::Existing {
@@ -1699,6 +2201,52 @@ mod tests {
         assert_eq!(
             editor.configuration.workspaces[0].name.as_deref(),
             Some("Code")
+        );
+    }
+
+    #[test]
+    fn open_project_exposes_only_contextual_fields_and_defaults_to_zed() {
+        let Some(mut configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let Some(action) = ActionSpec::new("open-project", ActionKind::OpenProject).ok() else {
+            return;
+        };
+        assert!(configuration.add_action(action).is_ok());
+        let editor = EditorState::new(configuration, EditorMode::Create);
+        let fields = editor.inspector_fields();
+        assert!(fields.contains(&super::InspectorField::ProjectPath));
+        assert!(fields.contains(&super::InspectorField::DesktopWorkspace));
+        assert!(!fields.contains(&super::InspectorField::Application));
+        assert!(!fields.contains(&super::InspectorField::WorkingDirectory));
+        assert!(!fields.contains(&super::InspectorField::ExecutionMode));
+        assert_eq!(
+            editor
+                .selected_action_spec()
+                .and_then(|action| action.parameters.application.as_deref()),
+            Some("zed")
+        );
+    }
+
+    #[test]
+    fn enter_and_escape_move_between_action_and_inspector_focus_and_control_s_saves() {
+        let Some(configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let mut editor = EditorState::new(configuration, EditorMode::Create);
+        assert!(editor.add_action_from_palette(11).is_ok());
+        assert_eq!(editor.panel, EditorPanel::Actions);
+        assert_eq!(editor.handle_key(KeyCode::Right), super::EditorAction::None);
+        assert_eq!(editor.panel, EditorPanel::Inspector);
+        assert_eq!(editor.handle_key(KeyCode::Left), super::EditorAction::None);
+        assert_eq!(editor.panel, EditorPanel::Actions);
+        assert_eq!(editor.handle_key(KeyCode::Enter), super::EditorAction::None);
+        assert_eq!(editor.panel, EditorPanel::Inspector);
+        assert_eq!(editor.handle_key(KeyCode::Esc), super::EditorAction::None);
+        assert_eq!(editor.panel, EditorPanel::Actions);
+        assert_eq!(
+            editor.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL,)),
+            super::EditorAction::SaveRequested
         );
     }
 }

@@ -15,6 +15,7 @@ use crate::{
         },
     },
     error::Result,
+    infrastructure::filesystem::PathResolver,
 };
 
 use super::errors::ZedError;
@@ -111,6 +112,7 @@ impl ZedBackend {
     }
 
     pub fn resolve_project_path(&self, project_path: &Path) -> Result<PathBuf> {
+        let project_path = self.expand_project_path(project_path)?;
         if !project_path.is_absolute() {
             return Err(ZedError::InvalidProjectPath {
                 detail: "the configured project path must be absolute".to_owned(),
@@ -119,7 +121,7 @@ impl ZedBackend {
         }
         let exists = self
             .file_system
-            .exists(project_path)
+            .exists(&project_path)
             .map_err(|source| operation_error("inspect-project-path", source))?;
         if !exists {
             return Err(ZedError::InvalidProjectPath {
@@ -132,7 +134,7 @@ impl ZedBackend {
         }
         let directory = self
             .file_system
-            .is_directory(project_path)
+            .is_directory(&project_path)
             .map_err(|source| operation_error("inspect-project-path", source))?;
         if !directory {
             return Err(ZedError::InvalidProjectPath {
@@ -144,8 +146,43 @@ impl ZedBackend {
             .into_workstate());
         }
         self.file_system
-            .canonicalize(project_path)
+            .canonicalize(&project_path)
             .map_err(|source| operation_error("resolve-project-path", source))
+    }
+
+    fn expand_project_path(&self, project_path: &Path) -> Result<PathBuf> {
+        if project_path.is_absolute() {
+            return Ok(project_path.to_path_buf());
+        }
+
+        let Some(raw) = project_path.to_str() else {
+            return Err(ZedError::InvalidProjectPath {
+                detail: "the configured project path must be absolute".to_owned(),
+            }
+            .into_workstate());
+        };
+        let is_home_relative =
+            raw == "~" || raw.starts_with("~/") || raw == "$HOME" || raw.starts_with("$HOME/");
+        if !is_home_relative {
+            return Err(ZedError::InvalidProjectPath {
+                detail: "the configured project path must be absolute or start with ~/ or $HOME/"
+                    .to_owned(),
+            }
+            .into_workstate());
+        }
+
+        let home = self
+            .file_system
+            .home_directory()
+            .map_err(|source| operation_error("resolve-project-home", source))?;
+        let resolver = PathResolver::new(home, self.file_system.as_ref())
+            .map_err(|source| operation_error("resolve-project-path", source))?;
+        resolver.expand(raw).map_err(|error| {
+            ZedError::InvalidProjectPath {
+                detail: error.message,
+            }
+            .into_workstate()
+        })
     }
 
     async fn observe_zed_projects(&self) -> Result<Vec<EditorWindowSnapshot>> {

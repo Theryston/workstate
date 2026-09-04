@@ -3,6 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
     pub border: Color,
+    pub brand: Color,
     pub title: Color,
     pub text: Color,
     pub muted: Color,
@@ -17,6 +18,7 @@ impl Theme {
         if color {
             Self {
                 border: Color::Rgb(92, 104, 128),
+                brand: Color::Blue,
                 title: Color::Cyan,
                 text: Color::White,
                 muted: Color::Gray,
@@ -28,6 +30,7 @@ impl Theme {
         } else {
             Self {
                 border: Color::Reset,
+                brand: Color::Reset,
                 title: Color::Reset,
                 text: Color::Reset,
                 muted: Color::Reset,
@@ -45,6 +48,10 @@ impl Theme {
 
     pub fn title_style(self) -> Style {
         Style::default().fg(self.title).add_modifier(Modifier::BOLD)
+    }
+
+    pub fn brand_style(self) -> Style {
+        Style::default().fg(self.brand).add_modifier(Modifier::BOLD)
     }
 
     pub fn text_style(self) -> Style {

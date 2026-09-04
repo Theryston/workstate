@@ -6,13 +6,10 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use crate::domain::{
-    ActionKind, ActionSpec, EnvironmentName, ExecutionMode, TilingPreference, WorkspaceReference,
-    WorkspaceSpec, WorkspaceTarget,
-};
+use crate::domain::{ActionKind, ActionSpec, EnvironmentName};
 
 use super::{
-    editor::{EditorPanel, EditorState, action_palette},
+    editor::{EditorPanel, EditorState, InspectorChoice, InspectorPicker, action_palette},
     progress::{ActionProgressStatus, ProgressState},
     state::{EnvironmentStatus, SELECTOR_EMPTY_MESSAGE, SelectorState},
     theme::Theme,
@@ -61,45 +58,36 @@ pub fn render_editor(frame: &mut Frame<'_>, state: &EditorState, theme: Theme) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(5),
-            Constraint::Length(2),
+            Constraint::Length(1),
         ])
         .split(area);
 
     let header = Paragraph::new(Line::from(vec![
-        Span::styled(" Workstate ", theme.title_style()),
-        Span::styled(
-            format!(
-                "{} · {}",
-                state.configuration.name, state.configuration.slug
-            ),
-            theme.text_style(),
-        ),
+        Span::styled("Workstate", theme.brand_style()),
+        Span::styled("  ", theme.muted_style()),
+        Span::styled(state.configuration.name.to_string(), theme.text_style()),
     ]))
     .block(panel_block("Environment", theme))
-    .wrap(Wrap { trim: true });
+    .style(theme.text_style());
     frame.render_widget(header, sections[0]);
 
+    let inspector_width = match state.panel {
+        EditorPanel::Actions => 25,
+        EditorPanel::Inspector => 80,
+    };
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+        .constraints([
+            Constraint::Percentage(100 - inspector_width),
+            Constraint::Percentage(inspector_width),
+        ])
         .split(sections[1]);
 
-    let left = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
-        .split(columns[0]);
-    render_action_list(frame, state, theme, left[0]);
-    render_workspace_list(frame, state, theme, left[1]);
-
-    match state.panel {
-        EditorPanel::Review => render_review(frame, state, theme, columns[1]),
-        EditorPanel::Actions | EditorPanel::Workspaces | EditorPanel::Inspector => {
-            render_inspector(frame, state, theme, columns[1])
-        }
-    }
+    render_action_list(frame, state, theme, columns[0]);
+    render_inspector(frame, state, theme, columns[1]);
 
     let footer = Paragraph::new(
-        "↑↓ move  Tab panel  a add  Enter/l link COSMIC workspace  n new target  e label/name  w directory  o app  p project  c command  v tool  r check  m mode  g workspace  x target  +/- dependencies  s save",
+        "↑↓ navigate  ← back  → edit  Enter edit  Tab focus  a add  d delete  Esc back/exit  s/Ctrl+S save",
     )
     .style(theme.muted_style())
     .block(
@@ -124,6 +112,9 @@ pub fn render_editor(frame: &mut Frame<'_>, state: &EditorState, theme: Theme) {
             "y confirm · n or Esc cancel",
             theme,
         );
+    }
+    if let Some(picker) = &state.inspector_picker {
+        render_inspector_picker(frame, picker, theme);
     }
     if state.workspace_picker_open {
         render_live_workspace_picker(frame, state, theme);
@@ -281,84 +272,34 @@ pub fn render_delete_confirmation(
 }
 
 fn render_action_list(frame: &mut Frame<'_>, state: &EditorState, theme: Theme, area: Rect) {
-    let items = state
+    let mut items = state
         .configuration
         .actions
         .iter()
         .map(|action| {
-            ListItem::new(Line::from(vec![
-                Span::styled(action.id.to_string(), theme.title_style()),
-                Span::styled(format!("  {}", action_label(action)), theme.text_style()),
-            ]))
+            ListItem::new(Line::from(vec![Span::styled(
+                action_label(action),
+                theme.text_style(),
+            )]))
         })
         .collect::<Vec<_>>();
+    if items.is_empty() {
+        items.push(ListItem::new(Span::styled(
+            "No actions yet. Press a to add one.",
+            theme.muted_style(),
+        )));
+    }
     let list = List::new(items)
-        .block(panel_block("Actions · a to add", theme))
+        .block(focused_panel_block(
+            "Actions",
+            theme,
+            state.panel == EditorPanel::Actions,
+        ))
         .highlight_style(theme.selected_style())
         .highlight_symbol("▸ ");
     let mut list_state = ListState::default();
     list_state.select(state.selected_action);
     frame.render_stateful_widget(list, area, &mut list_state);
-}
-
-fn render_workspace_list(frame: &mut Frame<'_>, state: &EditorState, theme: Theme, area: Rect) {
-    let mut items = state
-        .configuration
-        .workspaces
-        .iter()
-        .map(|workspace| {
-            ListItem::new(Line::from(vec![
-                Span::styled(workspace.id.to_string(), theme.title_style()),
-                Span::styled(
-                    format!("  {}", workspace_target_label(workspace)),
-                    theme.text_style(),
-                ),
-                Span::styled(
-                    format!("  tiling {}", tiling_label(workspace.tiling)),
-                    theme.muted_style(),
-                ),
-            ]))
-        })
-        .collect::<Vec<_>>();
-    if !state.live_workspaces.is_empty() {
-        if !items.is_empty() {
-            items.push(ListItem::new(Span::styled(
-                "COSMIC workspaces",
-                theme.muted_style(),
-            )));
-        }
-        items.extend(state.live_workspaces.iter().map(|workspace| {
-            let label = workspace
-                .name
-                .as_deref()
-                .unwrap_or(workspace.identity.as_str());
-            let active = if workspace.focused { "  active" } else { "" };
-            let tiling = workspace
-                .tiling_enabled
-                .map(|enabled| if enabled { "on" } else { "off" })
-                .unwrap_or("unknown");
-            ListItem::new(Line::from(vec![
-                Span::styled("• ", theme.muted_style()),
-                Span::styled(label.to_owned(), theme.text_style()),
-                Span::styled(format!("  #{}", workspace.identity), theme.muted_style()),
-                Span::styled(active, theme.success_style()),
-                Span::styled(format!("  tiling {tiling}"), theme.muted_style()),
-            ]))
-        }));
-    } else if let Some(error) = &state.workspace_observation_error {
-        items.push(ListItem::new(Span::styled(
-            "COSMIC workspaces unavailable",
-            theme.warning_style(),
-        )));
-        items.push(ListItem::new(Span::styled(error, theme.error_style())));
-    } else if items.is_empty() {
-        items.push(ListItem::new(Span::styled(
-            "No workspaces configured yet.",
-            theme.muted_style(),
-        )));
-    }
-    let list = List::new(items).block(panel_block("Workspaces · Enter link live", theme));
-    frame.render_widget(list, area);
 }
 
 fn render_live_workspace_picker(frame: &mut Frame<'_>, state: &EditorState, theme: Theme) {
@@ -387,7 +328,7 @@ fn render_live_workspace_picker(frame: &mut Frame<'_>, state: &EditorState, them
         .collect::<Vec<_>>();
     let list = List::new(items)
         .block(panel_block(
-            "Link COSMIC workspace · Enter confirm · Esc cancel",
+            "Select COSMIC workspace · Enter confirm · Esc cancel",
             theme,
         ))
         .highlight_style(theme.selected_style())
@@ -398,189 +339,133 @@ fn render_live_workspace_picker(frame: &mut Frame<'_>, state: &EditorState, them
 }
 
 fn render_inspector(frame: &mut Frame<'_>, state: &EditorState, theme: Theme, area: Rect) {
-    let mut lines = Vec::new();
-    if let Some(action) = state.selected_action_spec() {
-        lines.push(Line::from(vec![
-            Span::styled("Action ID  ", theme.muted_style()),
-            Span::styled(action.id.to_string(), theme.title_style()),
-        ]));
-        lines.push(Line::from(format!("Kind       {}", action.kind.key())));
-        lines.push(Line::from(format!(
-            "Label      {}",
-            action.display_label.as_deref().unwrap_or("not set")
-        )));
-        lines.push(Line::from(format!(
-            "Directory  {}",
-            action.working_directory.as_deref().unwrap_or("not set")
-        )));
-        let workspace = action
-            .desktop_workspace
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| "current".to_owned());
-        lines.push(Line::from(format!("Workspace  {workspace}")));
-        let mode = action
-            .execution_mode
-            .as_ref()
-            .map(|value| execution_mode_label(*value).to_owned())
-            .unwrap_or_else(|| "not set".to_owned());
-        lines.push(Line::from(format!("Mode       {mode}")));
-        let dependencies = if action.depends_on.is_empty() {
-            "none".to_owned()
-        } else {
-            action
-                .depends_on
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        lines.push(Line::from(format!("Depends on {dependencies}")));
-        for path in state.dependency_path(&action.id) {
-            lines.push(Line::from(Span::styled(
-                format!("Path       {path}"),
-                theme.muted_style(),
-            )));
-        }
-        lines.push(Line::from(format!(
-            "Readiness  {} check(s)",
-            action.readiness_checks.len()
-        )));
-        let timeout = action
-            .timeout
-            .as_ref()
-            .map(|value| format!("{} ms", value.milliseconds))
-            .unwrap_or_else(|| "default".to_owned());
-        lines.push(Line::from(format!("Timeout    {timeout}")));
-        lines.push(Line::from(format!(
-            "Retry      {} attempt(s), {} ms delay",
-            action.retry_policy.max_attempts, action.retry_policy.delay_milliseconds
-        )));
-        lines.push(Line::from(format!(
-            "Cleanup    {}",
-            format!("{:?}", action.cleanup_policy).to_ascii_lowercase()
-        )));
-        if let Some(application) = &action.parameters.application {
-            lines.push(Line::from(format!("Application {application}")));
-        }
-        if let Some(project) = &action.parameters.project_path {
-            lines.push(Line::from(format!("Project     {project}")));
-        }
-        if let Some(command) = &action.parameters.command {
-            lines.push(Line::from(format!("Command     {}", command.program)));
-        }
-        if let Some(container) = &action.parameters.container {
-            lines.push(Line::from(format!("Container   {}", container.name)));
-            if let Some(image) = &container.image {
-                lines.push(Line::from(format!("Image       {image}")));
-            }
-        }
-        if let Some(compose) = &action.parameters.compose {
-            lines.push(Line::from(format!(
-                "Compose     {}",
-                compose.project_name.as_deref().unwrap_or("default project")
-            )));
-        }
-        if let Some(emulator) = &action.parameters.emulator {
-            lines.push(Line::from(format!("AVD         {}", emulator.avd)));
-        }
-        if let Some(workspace_id) = &action.parameters.workspace_id {
-            lines.push(Line::from(format!("Workspace ID {workspace_id}")));
-        }
-        let hint = match &action.kind {
-            ActionKind::OpenApplication => "Edit: o application · w directory · g workspace",
-            ActionKind::OpenProject => {
-                "Edit: o application · p project · w directory · g workspace"
-            }
-            ActionKind::RunCommand | ActionKind::StartService => {
-                "Edit: c command · w directory · m mode · g workspace"
-            }
-            ActionKind::CreateOrSelectWorkspace => "Edit: x workspace target",
-            ActionKind::ConfigureTiling => "Edit: g workspace",
-            ActionKind::StartContainer => "Edit: v container",
-            ActionKind::StartCompose => "Edit: v Compose project",
-            ActionKind::StartAndroidEmulator => "Edit: v Android virtual device",
-            ActionKind::WaitForCondition | ActionKind::VerifyResource => "Edit: r readiness delay",
-            ActionKind::Custom { .. } => "Edit common properties and dependencies",
-        };
-        lines.push(Line::from(Span::styled(hint, theme.muted_style())));
-    } else {
-        lines.push(Line::from(Span::styled(
-            "No action selected. Press a to add one.",
-            theme.muted_style(),
-        )));
-    }
-
+    let Some(action) = state.selected_action_spec() else {
+        frame.render_widget(
+            Paragraph::new("Select an action to inspect its fields.")
+                .block(focused_panel_block(
+                    "Inspector",
+                    theme,
+                    state.panel == EditorPanel::Inspector,
+                ))
+                .style(theme.muted_style())
+                .wrap(Wrap { trim: true }),
+            area,
+        );
+        return;
+    };
+    let fields = state.inspector_fields();
+    let mut items = fields
+        .iter()
+        .map(|field| {
+            let label = format!("{:<22}", field.label());
+            ListItem::new(Line::from(vec![
+                Span::styled(label, theme.muted_style()),
+                Span::styled(state.inspector_field_value(*field), theme.text_style()),
+            ]))
+        })
+        .collect::<Vec<_>>();
     if let Some(notice) = &state.notice {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(notice, theme.success_style())));
+        items.push(ListItem::new(Line::from(Span::styled(
+            format!("Notice  {notice}"),
+            theme.success_style(),
+        ))));
     }
     if !state.validation_errors.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("Validation", theme.error_style())));
-        lines.extend(
-            state
-                .validation_errors
-                .iter()
-                .map(|error| Line::from(Span::styled(format!("· {error}"), theme.error_style()))),
-        );
+        items.push(ListItem::new(Line::from(Span::styled(
+            "Validation",
+            theme.error_style(),
+        ))));
+        items.extend(state.validation_errors.iter().map(|error| {
+            ListItem::new(Line::from(Span::styled(
+                format!("  {error}"),
+                theme.error_style(),
+            )))
+        }));
     }
-
-    frame.render_widget(
-        Paragraph::new(Text::from(lines))
-            .block(panel_block("Inspector", theme))
-            .wrap(Wrap { trim: true }),
-        area,
-    );
+    let title = format!("Inspector · {}", action_label(action));
+    let list = List::new(items)
+        .block(focused_panel_block(
+            &title,
+            theme,
+            state.panel == EditorPanel::Inspector,
+        ))
+        .highlight_style(theme.selected_style())
+        .highlight_symbol("▸ ");
+    let mut list_state = ListState::default();
+    list_state.select(state.selected_inspector);
+    frame.render_stateful_widget(list, area, &mut list_state);
 }
 
-fn render_review(frame: &mut Frame<'_>, state: &EditorState, theme: Theme, area: Rect) {
-    let mut lines = vec![
-        Line::from(Span::styled("Review before saving", theme.title_style())),
-        Line::from(format!("Name       {}", state.configuration.name)),
-        Line::from(format!("Slug       {}", state.configuration.slug)),
-        Line::from(format!(
-            "Workspaces {}",
-            state.configuration.workspaces.len()
-        )),
-        Line::from(format!("Actions    {}", state.configuration.actions.len())),
-    ];
-    for action in &state.configuration.actions {
-        let dependencies = if action.depends_on.is_empty() {
-            "no dependencies".to_owned()
-        } else {
-            action
-                .depends_on
+fn render_inspector_picker(frame: &mut Frame<'_>, picker: &InspectorPicker, theme: Theme) {
+    match picker {
+        InspectorPicker::Choices {
+            title,
+            options,
+            selected,
+            ..
+        } => {
+            let items = options
                 .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        lines.push(Line::from(format!(
-            "· {}  →  {}",
-            action_label(action),
-            dependencies
-        )));
+                .map(|choice| render_choice(choice, theme))
+                .collect::<Vec<_>>();
+            let list = List::new(items)
+                .block(panel_block(&format!("Select {title}"), theme))
+                .highlight_style(theme.selected_style())
+                .highlight_symbol("▸ ");
+            let mut list_state = ListState::default();
+            list_state.select(Some(*selected));
+            let area = centered_rect(68, 62, frame.area());
+            frame.render_widget(Clear, area);
+            frame.render_stateful_widget(list, area, &mut list_state);
+        }
+        InspectorPicker::Dependencies {
+            options,
+            selected,
+            checked,
+            ..
+        } => {
+            let mut items = options
+                .iter()
+                .map(|action_id| {
+                    let marker = if checked.contains(action_id) {
+                        "[x] "
+                    } else {
+                        "[ ] "
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(marker, theme.muted_style()),
+                        Span::styled(action_id.to_string(), theme.text_style()),
+                    ]))
+                })
+                .collect::<Vec<_>>();
+            if items.is_empty() {
+                items.push(ListItem::new(Span::styled(
+                    "No other actions are available.",
+                    theme.muted_style(),
+                )));
+            }
+            let list = List::new(items)
+                .block(panel_block(
+                    "Select dependencies · Space toggle · Enter apply",
+                    theme,
+                ))
+                .highlight_style(theme.selected_style())
+                .highlight_symbol("▸ ");
+            let mut list_state = ListState::default();
+            list_state.select((!options.is_empty()).then_some(*selected));
+            let area = centered_rect(68, 62, frame.area());
+            frame.render_widget(Clear, area);
+            frame.render_stateful_widget(list, area, &mut list_state);
+        }
     }
-    if !state.validation_errors.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "Resolve validation errors before saving.",
-            theme.error_style(),
-        )));
-    } else {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "Press Enter or s to request save confirmation.",
-            theme.success_style(),
-        )));
+}
+
+fn render_choice(choice: &InspectorChoice, theme: Theme) -> ListItem<'static> {
+    let mut spans = vec![Span::styled(choice.label.clone(), theme.text_style())];
+    if let Some(detail) = &choice.detail {
+        spans.push(Span::styled(format!("  {detail}"), theme.muted_style()));
     }
-    frame.render_widget(
-        Paragraph::new(Text::from(lines))
-            .block(panel_block("Review · save", theme))
-            .wrap(Wrap { trim: true }),
-        area,
-    );
+    ListItem::new(Line::from(spans))
 }
 
 fn render_palette(frame: &mut Frame<'_>, state: &EditorState, theme: Theme) {
@@ -624,6 +509,22 @@ fn panel_block(title: &str, theme: Theme) -> Block<'static> {
         .title(Span::styled(title.to_owned(), theme.title_style()))
 }
 
+fn focused_panel_block(title: &str, theme: Theme, focused: bool) -> Block<'static> {
+    let title_style = if focused {
+        theme.title_style()
+    } else {
+        theme.muted_style()
+    };
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(if focused {
+            Style::default().fg(theme.title)
+        } else {
+            theme.border_style()
+        })
+        .title(Span::styled(title.to_owned(), title_style))
+}
+
 fn action_label(action: &ActionSpec) -> String {
     if let Some(label) = &action.display_label {
         return label.clone();
@@ -631,7 +532,7 @@ fn action_label(action: &ActionSpec) -> String {
 
     match &action.kind {
         ActionKind::OpenApplication => "Open application".to_owned(),
-        ActionKind::OpenProject => "Open project".to_owned(),
+        ActionKind::OpenProject => "Open Project with Zed".to_owned(),
         ActionKind::RunCommand => "Run command".to_owned(),
         ActionKind::StartService => "Start service".to_owned(),
         ActionKind::CreateOrSelectWorkspace => "Create or select workspace".to_owned(),
@@ -642,34 +543,6 @@ fn action_label(action: &ActionSpec) -> String {
         ActionKind::WaitForCondition => "Wait for condition".to_owned(),
         ActionKind::VerifyResource => "Verify resource".to_owned(),
         ActionKind::Custom { name } => format!("Custom action: {name}"),
-    }
-}
-
-fn workspace_target_label(workspace: &WorkspaceSpec) -> String {
-    match &workspace.target {
-        WorkspaceTarget::Current => "current".to_owned(),
-        WorkspaceTarget::Existing { reference } => match reference {
-            WorkspaceReference::Name(name) => format!("existing {name}"),
-            WorkspaceReference::Identifier(identifier) => format!("existing #{identifier}"),
-        },
-        WorkspaceTarget::NextEmpty => "next empty".to_owned(),
-        WorkspaceTarget::Create { name } => format!("create {name}"),
-        WorkspaceTarget::None => "no movement".to_owned(),
-    }
-}
-
-fn tiling_label(tiling: TilingPreference) -> &'static str {
-    match tiling {
-        TilingPreference::Unchanged => "unchanged",
-        TilingPreference::Enabled => "enabled",
-        TilingPreference::Disabled => "disabled",
-    }
-}
-
-fn execution_mode_label(mode: ExecutionMode) -> &'static str {
-    match mode {
-        ExecutionMode::RunOnce => "run once",
-        ExecutionMode::Background => "background",
     }
 }
 
@@ -829,7 +702,12 @@ mod tests {
             .collect::<String>();
         assert!(rendered.contains("Personal Blog"));
         assert!(rendered.contains("Validation"));
-        assert!(rendered.contains("Open project"));
+        assert!(rendered.contains("Open Project with Zed"));
+        assert!(rendered.contains("Project path"));
+        assert!(rendered.contains("Desktop workspace"));
+        assert!(!rendered.contains("Working directory"));
+        assert!(!rendered.contains("Execution mode"));
+        assert!(!rendered.contains("Application"));
     }
 
     #[test]

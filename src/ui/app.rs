@@ -160,7 +160,7 @@ where
                 }
                 _ => {}
             },
-            UiEvent::Key(key) => match state.handle_key(key.code) {
+            UiEvent::Key(key) => match state.handle_key_event(key) {
                 EditorAction::SaveRequested => {
                     if state.validate().is_ok() {
                         save_confirmation = true;
