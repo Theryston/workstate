@@ -967,7 +967,7 @@ impl EditorState {
                 self.move_selection(1);
                 EditorAction::None
             }
-            KeyCode::Char('a') => {
+            KeyCode::Char('a') if self.panel == EditorPanel::Actions => {
                 self.selected_palette = 0;
                 self.palette_open = true;
                 EditorAction::PaletteOpened
@@ -997,7 +997,9 @@ impl EditorState {
                     EditorAction::None
                 }
             },
-            KeyCode::Char('d') if self.selected_action.is_some() => {
+            KeyCode::Char('d')
+                if self.panel == EditorPanel::Actions && self.selected_action.is_some() =>
+            {
                 self.delete_confirmation = true;
                 EditorAction::None
             }
@@ -2443,5 +2445,39 @@ mod tests {
             editor.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL,)),
             super::EditorAction::SaveRequested
         );
+    }
+
+    #[test]
+    fn action_mutation_shortcuts_are_scoped_to_the_actions_panel() {
+        let Some(configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let mut editor = EditorState::new(configuration, EditorMode::Create);
+        assert!(editor.add_action_from_palette(11).is_ok());
+        editor.panel = EditorPanel::Inspector;
+
+        assert_eq!(
+            editor.handle_key(KeyCode::Char('a')),
+            super::EditorAction::None
+        );
+        assert!(!editor.palette_open);
+        assert_eq!(
+            editor.handle_key(KeyCode::Char('d')),
+            super::EditorAction::None
+        );
+        assert!(!editor.delete_confirmation);
+
+        editor.panel = EditorPanel::Actions;
+        assert_eq!(
+            editor.handle_key(KeyCode::Char('a')),
+            super::EditorAction::PaletteOpened
+        );
+        assert!(editor.palette_open);
+        assert_eq!(editor.handle_key(KeyCode::Esc), super::EditorAction::None);
+        assert_eq!(
+            editor.handle_key(KeyCode::Char('d')),
+            super::EditorAction::None
+        );
+        assert!(editor.delete_confirmation);
     }
 }

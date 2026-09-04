@@ -277,7 +277,7 @@ fn render_action_list(frame: &mut Frame<'_>, state: &EditorState, theme: Theme, 
         .collect::<Vec<_>>();
     if items.is_empty() {
         items.push(ListItem::new(Span::styled(
-            "No actions yet. Press a to add one.",
+            "No actions yet. Press a to add an action.",
             theme.muted_style(),
         )));
     }
@@ -458,7 +458,7 @@ fn editor_controls(state: &EditorState) -> Vec<EditorControl> {
             },
             EditorControl {
                 key: "Enter",
-                label: "Add",
+                label: "Add action",
             },
             EditorControl {
                 key: "Esc",
@@ -543,11 +543,11 @@ fn editor_controls(state: &EditorState) -> Vec<EditorControl> {
             },
             EditorControl {
                 key: "a",
-                label: "Add",
+                label: "Add action",
             },
             EditorControl {
                 key: "d",
-                label: "Delete",
+                label: "Delete action",
             },
             EditorControl {
                 key: "s",
@@ -565,7 +565,7 @@ fn editor_controls(state: &EditorState) -> Vec<EditorControl> {
             },
             EditorControl {
                 key: "a",
-                label: "Add",
+                label: "Add action",
             },
             EditorControl {
                 key: "s",
@@ -587,15 +587,7 @@ fn editor_controls(state: &EditorState) -> Vec<EditorControl> {
             },
             EditorControl {
                 key: "Enter",
-                label: "Edit",
-            },
-            EditorControl {
-                key: "a",
-                label: "Add",
-            },
-            EditorControl {
-                key: "d",
-                label: "Delete",
+                label: "Edit field",
             },
             EditorControl {
                 key: "s",
@@ -610,10 +602,6 @@ fn editor_controls(state: &EditorState) -> Vec<EditorControl> {
             EditorControl {
                 key: "←",
                 label: "Back",
-            },
-            EditorControl {
-                key: "a",
-                label: "Add",
             },
             EditorControl {
                 key: "s",
@@ -866,7 +854,7 @@ mod tests {
             control_pairs(&empty_state),
             vec![
                 ("↑↓", "Navigate"),
-                ("a", "Add"),
+                ("a", "Add action"),
                 ("s", "Save"),
                 ("q", "Exit")
             ]
@@ -885,8 +873,8 @@ mod tests {
             vec![
                 ("↑↓", "Move"),
                 ("→", "Inspect"),
-                ("a", "Add"),
-                ("d", "Delete"),
+                ("a", "Add action"),
+                ("d", "Delete action"),
                 ("s", "Save"),
                 ("q", "Exit"),
             ]
@@ -898,9 +886,7 @@ mod tests {
             vec![
                 ("↑↓", "Move"),
                 ("←", "Back"),
-                ("Enter", "Edit"),
-                ("a", "Add"),
-                ("d", "Delete"),
+                ("Enter", "Edit field"),
                 ("s", "Save"),
                 ("q", "Exit"),
             ]
@@ -940,7 +926,7 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(rendered.contains("s Save"));
-        assert!(rendered.contains("a Add"));
+        assert!(rendered.contains("a Add action"));
     }
 
     #[test]

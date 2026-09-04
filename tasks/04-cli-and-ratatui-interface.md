@@ -135,6 +135,7 @@ The editor must support both creation and editing:
 - revalidate a displayed invalid field after it changes and remove its error immediately when fixed;
 - show a context-sensitive footer legend for the focused action list, inspector, and modal editors;
 - show one canonical shortcut per operation, with visually distinct key tokens and operation labels;
+- keep action-list mutations (`a` and `d`) unavailable while the inspector is focused;
 - show a review and save screen.
 
 The user must be able to add actions in any order and attach dependencies after creating them. Do not implement a fixed sequence of technology-specific questions.
@@ -257,15 +258,16 @@ The progress view must close only after setup succeeds or rollback finishes.
 Use stable, discoverable navigation. At minimum, support:
 
 ~~~
-Up and Down      move selection
-Enter            open or confirm
-Esc              go back or cancel
+Up and Down      move the selection in the focused pane
+Right            enter the inspector from the action list
+Left             return to the action list from the inspector
+Enter            inspect, edit, or confirm according to context
+Esc              go back, cancel, or exit according to context
 Tab              move between panels
-a                add an action
-e                edit the selected item
-d                duplicate or delete according to context
+a                add an action from the action list
+d                delete the selected action from the action list
 s                save
-q                quit when safe
+q                exit when safe
 ~~~
 
 If a key has a destructive meaning, the UI must show the current action and require confirmation where appropriate.
