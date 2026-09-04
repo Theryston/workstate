@@ -6,6 +6,8 @@ use super::{ActionId, ActionSpec, DomainError, WorkspaceId};
 pub struct ActionGraph {
     actions: BTreeMap<ActionId, ActionSpec>,
     ordered_action_ids: Vec<ActionId>,
+    configuration_indices: BTreeMap<ActionId, usize>,
+    dependents: BTreeMap<ActionId, Vec<ActionId>>,
 }
 
 impl ActionGraph {
@@ -14,8 +16,9 @@ impl ActionGraph {
         workspace_ids: &BTreeSet<WorkspaceId>,
     ) -> Result<Self, DomainError> {
         let mut action_map = BTreeMap::new();
+        let mut configuration_indices = BTreeMap::new();
 
-        for action in actions {
+        for (index, action) in actions.iter().enumerate() {
             action.validate()?;
             if action_map
                 .insert(action.id.clone(), action.clone())
@@ -25,6 +28,7 @@ impl ActionGraph {
                     id: action.id.to_string(),
                 });
             }
+            configuration_indices.insert(action.id.clone(), index);
         }
 
         for action in actions {
@@ -86,13 +90,18 @@ impl ActionGraph {
         let mut ready = BTreeSet::new();
         for (action_id, count) in &indegree {
             if *count == 0 {
-                ready.insert(action_id.clone());
+                let Some(index) = configuration_indices.get(action_id) else {
+                    return Err(DomainError::GraphInvariant {
+                        message: format!("missing configuration index for {action_id}"),
+                    });
+                };
+                ready.insert((*index, action_id.clone()));
             }
         }
 
         let mut ordered_action_ids = Vec::with_capacity(actions.len());
-        while let Some(action_id) = ready.first().cloned() {
-            ready.remove(&action_id);
+        while let Some((index, action_id)) = ready.first().cloned() {
+            ready.remove(&(index, action_id.clone()));
             ordered_action_ids.push(action_id.clone());
 
             if let Some(dependent_ids) = dependents.get(&action_id) {
@@ -107,7 +116,12 @@ impl ActionGraph {
                     };
                     *count -= 1;
                     if *count == 0 {
-                        ready.insert(dependent_id.clone());
+                        let Some(index) = configuration_indices.get(dependent_id) else {
+                            return Err(DomainError::GraphInvariant {
+                                message: format!("missing configuration index for {dependent_id}"),
+                            });
+                        };
+                        ready.insert((*index, dependent_id.clone()));
                     }
                 }
             }
@@ -126,6 +140,8 @@ impl ActionGraph {
         Ok(Self {
             actions: action_map,
             ordered_action_ids,
+            configuration_indices,
+            dependents,
         })
     }
 
@@ -135,6 +151,23 @@ impl ActionGraph {
 
     pub fn action(&self, action_id: &ActionId) -> Option<&ActionSpec> {
         self.actions.get(action_id)
+    }
+
+    pub fn configuration_index(&self, action_id: &ActionId) -> Option<usize> {
+        self.configuration_indices.get(action_id).copied()
+    }
+
+    pub fn dependencies_of(&self, action_id: &ActionId) -> Option<&[ActionId]> {
+        self.actions
+            .get(action_id)
+            .map(|action| action.depends_on.as_slice())
+    }
+
+    pub fn dependents_of(&self, action_id: &ActionId) -> &[ActionId] {
+        self.dependents
+            .get(action_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     pub fn actions(&self) -> impl Iterator<Item = &ActionSpec> {
@@ -202,6 +235,29 @@ mod tests {
             .map(ToString::to_string)
             .collect::<Vec<_>>();
         assert_eq!(order, vec!["first", "second", "third"]);
+    }
+
+    #[test]
+    fn uses_configuration_order_before_action_id_for_equal_priority_actions() {
+        let Some(last_configured) = command_action("z-last") else {
+            return;
+        };
+        let Some(first_configured) = command_action("a-first") else {
+            return;
+        };
+
+        let graph = ActionGraph::validate(&[last_configured, first_configured], &BTreeSet::new());
+        assert!(graph.is_ok());
+        let Some(graph) = graph.ok() else {
+            return;
+        };
+
+        let order = graph
+            .ordered_action_ids()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(order, vec!["z-last", "a-first"]);
     }
 
     #[test]

@@ -1,12 +1,11 @@
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Instant, SystemTime},
 };
 
 use crate::{
     application::ports::{
-        clock::Clock,
+        clock::{Clock, SystemClock},
         containers::ContainerBackend,
         desktop::{DesktopBackend, DesktopSnapshot},
         editor::EditorBackend,
@@ -16,6 +15,10 @@ use crate::{
         platform::PlatformDetector,
         process::{BoxFuture, ProcessOutput, ProcessRequest, ProcessRunner},
         terminal::TerminalBackend,
+    },
+    application::{
+        planner::{ActionHandlerRegistry, NoopReadinessCheckRunner, ReadinessCheckRunner},
+        reconciliation::{ReconciliationEngine, SchedulerOptions},
     },
     domain::{EnvironmentConfig, EnvironmentSlug, RuntimeState},
     error::{ErrorCategory, Result, WorkstateError},
@@ -80,6 +83,8 @@ pub struct AppContext {
     editor_backend: Arc<dyn EditorBackend>,
     emulator_backend: Arc<dyn EmulatorBackend>,
     integration_registry: Arc<IntegrationRegistry>,
+    action_handlers: Arc<ActionHandlerRegistry>,
+    readiness_runner: Arc<dyn ReadinessCheckRunner>,
 }
 
 impl AppContext {
@@ -97,6 +102,8 @@ impl AppContext {
             editor_backend: dependencies.editor_backend,
             emulator_backend: dependencies.emulator_backend,
             integration_registry: dependencies.integration_registry,
+            action_handlers: Arc::new(ActionHandlerRegistry::new()),
+            readiness_runner: Arc::new(NoopReadinessCheckRunner),
         }
     }
 
@@ -112,6 +119,16 @@ impl AppContext {
         ));
         self.state_store = Arc::new(TomlStateStore::new(Arc::clone(&self.file_system), paths));
         Ok(self)
+    }
+
+    pub fn with_action_handlers(mut self, handlers: Arc<ActionHandlerRegistry>) -> Self {
+        self.action_handlers = handlers;
+        self
+    }
+
+    pub fn with_readiness_runner(mut self, runner: Arc<dyn ReadinessCheckRunner>) -> Self {
+        self.readiness_runner = runner;
+        self
     }
 
     pub fn bootstrap() -> Result<Self> {
@@ -193,6 +210,24 @@ impl AppContext {
         self.integration_registry.as_ref()
     }
 
+    pub fn action_handler_registry(&self) -> Arc<ActionHandlerRegistry> {
+        Arc::clone(&self.action_handlers)
+    }
+
+    pub fn readiness_runner(&self) -> Arc<dyn ReadinessCheckRunner> {
+        Arc::clone(&self.readiness_runner)
+    }
+
+    pub fn reconciliation_engine(&self, options: SchedulerOptions) -> ReconciliationEngine<'_> {
+        ReconciliationEngine::with_clock(
+            self.integration_registry.as_ref(),
+            Arc::clone(&self.action_handlers),
+            Arc::clone(&self.readiness_runner),
+            Arc::clone(&self.clock),
+            options,
+        )
+    }
+
     pub fn preflight(&self) -> Result<()> {
         let platform = self.platform_detector.detect()?;
         self.integration_registry.preflight(&platform)
@@ -216,18 +251,6 @@ fn initialize_tracing() -> Result<()> {
                 source,
             )
         })
-}
-
-struct SystemClock;
-
-impl Clock for SystemClock {
-    fn now(&self) -> SystemTime {
-        SystemTime::now()
-    }
-
-    fn monotonic_now(&self) -> Instant {
-        Instant::now()
-    }
 }
 
 struct StaticPlatformDetector {
