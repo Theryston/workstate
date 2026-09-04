@@ -128,6 +128,8 @@ Implement a deterministic resolver for the workspace target declared by an actio
 7. Move the owned or safely identified window to the resolved workspace.
 8. If a user manually moved a reused window after Workstate observed it, stop must not close it or move it back.
 9. Focus a window only when the action requests focus; opening an environment must not steal focus unnecessarily.
+10. Support any number of Zed project actions in one environment. Derive the action's identity key from its resolved project directory, never from `ActionKind` alone.
+11. If desktop observation does not expose project metadata, serialize the launch-and-observe handoff, refresh the pre-launch snapshot after acquiring the coordination, and correlate only windows that appeared during that handoff.
 
 ### 6. Integrate with reconciliation and rollback
 
@@ -180,6 +182,7 @@ Add opt-in live smoke tests only if a developer explicitly enables them. They mu
 - The application layer contains no COSMIC command names, Zed flags, or window-manager parsing.
 - A supported environment can place Docker Desktop, Zed, and an emulator in different requested workspaces.
 - Zed opens in the configured directory without depending on the caller's PWD.
+- Multiple Zed project actions with different configured directories complete independently, including when the scheduler starts them concurrently.
 - Tiling is independently configurable per workspace.
 - Re-running an already correct environment does not create duplicates or toggle desktop state.
 - Rollback and stop preserve resources that were not created or changed by Workstate.

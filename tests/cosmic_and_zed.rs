@@ -5,7 +5,10 @@ use std::{
     collections::VecDeque,
     error::Error,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -215,6 +218,73 @@ impl ProcessRunner for FixtureProcessRunner {
                     WorkstateError::new(ErrorCategory::Runtime, "fake process stop lock failed")
                 })
         })
+    }
+}
+
+#[derive(Clone)]
+struct ConcurrentZedLaunchRunner {
+    desktop: FakeDesktop,
+    active_launches: Arc<AtomicUsize>,
+    max_active_launches: Arc<AtomicUsize>,
+    sequence: Arc<AtomicUsize>,
+}
+
+impl ConcurrentZedLaunchRunner {
+    fn new(desktop: FakeDesktop) -> Self {
+        Self {
+            desktop,
+            active_launches: Arc::new(AtomicUsize::new(0)),
+            max_active_launches: Arc::new(AtomicUsize::new(0)),
+            sequence: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn max_active_launches(&self) -> usize {
+        self.max_active_launches.load(Ordering::SeqCst)
+    }
+}
+
+impl ProcessRunner for ConcurrentZedLaunchRunner {
+    fn run<'a>(&'a self, _request: ProcessRequest) -> BoxFuture<'a, Result<ProcessOutput>> {
+        Box::pin(async {
+            Ok(ProcessOutput {
+                status: Some(0),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        })
+    }
+
+    fn start_background<'a>(
+        &'a self,
+        _request: ProcessRequest,
+    ) -> BoxFuture<'a, Result<BackgroundProcess>> {
+        let desktop = self.desktop.clone();
+        let active_launches = Arc::clone(&self.active_launches);
+        let max_active_launches = Arc::clone(&self.max_active_launches);
+        let sequence = Arc::clone(&self.sequence);
+        Box::pin(async move {
+            let active = active_launches.fetch_add(1, Ordering::SeqCst) + 1;
+            max_active_launches.fetch_max(active, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let index = sequence.fetch_add(1, Ordering::SeqCst);
+            let add_result = desktop.add_window(DesktopWindowSnapshot {
+                identity: format!("zed-launched-{index}"),
+                application: Some("dev.zed.Zed".to_owned()),
+                title: Some("Launched project".to_owned()),
+                project_path: None,
+                workspace_identity: Some("main".to_owned()),
+                focused: false,
+            });
+            tokio::task::yield_now().await;
+            active_launches.fetch_sub(1, Ordering::SeqCst);
+            add_result?;
+            BackgroundProcess::new(format!("fake-zed-process-{index}"))
+        })
+    }
+
+    fn stop_background<'a>(&'a self, _process: BackgroundProcess) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -576,6 +646,43 @@ async fn zed_marks_a_new_window_owned_only_after_observation() -> TestResult {
         calls[0].arguments,
         vec!["-n".to_owned(), project_path.display().to_string()]
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_zed_projects_are_correlated_by_their_project_key() -> TestResult {
+    let directory = tempdir()?;
+    let first_project = directory.path().join("api");
+    let second_project = directory.path().join("app");
+    std::fs::create_dir_all(&first_project)?;
+    std::fs::create_dir_all(&second_project)?;
+    let desktop = FakeDesktop::new(DesktopSnapshot {
+        workspaces: vec![workspace("main", "Main", 0, true, true)],
+        windows: Vec::new(),
+    });
+    let runner = ConcurrentZedLaunchRunner::new(desktop.clone());
+    let backend = Arc::new(
+        ZedBackend::new(
+            Arc::new(runner.clone()),
+            Arc::new(desktop),
+            Arc::new(LocalFileSystem),
+        )
+        .with_command(ZedCommand::new("zed-test"))
+        .with_timing(Duration::from_millis(1), Duration::from_millis(250)),
+    );
+
+    let first_future =
+        EditorBackend::open_project(backend.as_ref(), first_project, CancellationToken::new());
+    let second_future =
+        EditorBackend::open_project(backend.as_ref(), second_project, CancellationToken::new());
+    let (first, second) = tokio::join!(first_future, second_future);
+    let first = first?;
+    let second = second?;
+
+    assert!(first.owned);
+    assert!(second.owned);
+    assert_ne!(first.window.identity, second.window.identity);
+    assert_eq!(runner.max_active_launches(), 1);
     Ok(())
 }
 

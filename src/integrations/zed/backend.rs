@@ -65,6 +65,7 @@ pub struct ZedBackend {
     desktop: Arc<dyn DesktopBackend>,
     file_system: Arc<dyn FileSystem>,
     clock: Arc<dyn Clock>,
+    launch_lock: Arc<tokio::sync::Mutex<()>>,
     command: ZedCommand,
     poll_interval: Duration,
     poll_timeout: Duration,
@@ -90,6 +91,7 @@ impl ZedBackend {
             desktop,
             file_system,
             clock,
+            launch_lock: Arc::new(tokio::sync::Mutex::new(())),
             command: ZedCommand::default(),
             poll_interval: Duration::from_millis(25),
             poll_timeout: Duration::from_secs(5),
@@ -214,15 +216,18 @@ impl ZedBackend {
         cancellation.check()?;
         let project_path = self.resolve_project_path(&project_path)?;
         let before = self.observe_zed_projects().await?;
-        let matches = matching_projects(&before, &project_path);
-        if matches.len() > 1 {
-            return Err(ZedError::AmbiguousProject {
-                project: project_path.display().to_string(),
-                matches: matches.len(),
-            }
-            .into_workstate());
+        if let Some(window) = matching_project(&before, &project_path)? {
+            return Ok(EditorOpenOutcome {
+                status: EditorOperationStatus::Reused,
+                window,
+                owned: false,
+                process_identity: None,
+            });
         }
-        if let Some(window) = matches.into_iter().next() {
+
+        let _launch_guard = self.launch_lock.lock().await;
+        let before = self.observe_zed_projects().await?;
+        if let Some(window) = matching_project(&before, &project_path)? {
             return Ok(EditorOpenOutcome {
                 status: EditorOperationStatus::Reused,
                 window,
@@ -257,15 +262,7 @@ impl ZedBackend {
                     .into_workstate());
                 }
                 let observed = self.observe_zed_projects().await?;
-                let matches = matching_projects(&observed, &project_path);
-                if matches.len() > 1 {
-                    return Err(ZedError::AmbiguousProject {
-                        project: project.display().to_string(),
-                        matches: matches.len(),
-                    }
-                    .into_workstate());
-                }
-                if let Some(window) = matches.into_iter().next() {
+                if let Some(window) = matching_project(&observed, &project_path)? {
                     let owned = !before_ids.contains(&window.identity);
                     return Ok(EditorOpenOutcome {
                         status: if owned {
@@ -358,15 +355,24 @@ impl EditorBackend for ZedBackend {
     }
 }
 
-fn matching_projects(
+fn matching_project(
     windows: &[EditorWindowSnapshot],
     project_path: &Path,
-) -> Vec<EditorWindowSnapshot> {
-    windows
+) -> Result<Option<EditorWindowSnapshot>> {
+    let matches = windows
         .iter()
         .filter(|window| window.project_path.as_deref() == Some(project_path))
         .cloned()
-        .collect()
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [] => Ok(None),
+        [window] => Ok(Some(window.clone())),
+        _ => Err(ZedError::AmbiguousProject {
+            project: project_path.display().to_string(),
+            matches: matches.len(),
+        }
+        .into_workstate()),
+    }
 }
 
 pub fn is_zed_application(application: &str) -> bool {

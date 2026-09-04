@@ -466,6 +466,8 @@ Custom integration action
 
 The UI may show well-known integrations such as Zed, Docker, tmux, and Android Emulator when those capabilities are available. The core model must not make tmux the only possible representation of a background process, and it must not require every future integration to modify the core scheduler.
 
+An environment may contain any number of actions with the same `ActionKind`. The action ID remains unique for graph and persistence purposes, while each handler derives a resource identity key from the action's typed configuration. For `Open Project with Zed`, the key is the resolved canonical project directory. Different project keys must be reconciled independently even when the scheduler runs those actions concurrently. Never use the action kind alone as the identity of an external resource.
+
 ### 8.3 Working directory
 
 Every command-like or project-like action may specify its own `working_directory` or project path.
@@ -876,6 +878,8 @@ The Zed backend must support:
 - closing only windows opened by the environment and not needed by another active environment.
 
 Project matching must use stable or sufficiently specific signals. Do not close every Zed window, and do not identify a project solely by a broad substring when a stronger identity is available.
+
+Multiple `Open Project with Zed` actions are supported. When desktop observation does not expose project metadata, the Zed backend must serialize the launch-and-observe handoff, take a fresh pre-launch snapshot after acquiring that coordination, and correlate the newly observed window against that snapshot. A different Zed project launched by another action must not make the current project appear ambiguous. Multiple windows that genuinely match the same project key remain ambiguous unless a stronger stable identity resolves them.
 
 ## 14. Android Emulator behavior
 
