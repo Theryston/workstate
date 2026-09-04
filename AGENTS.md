@@ -1260,6 +1260,8 @@ The editor has two primary focus states:
 
 Saving is available through `s` and `Ctrl+S`. Saving still validates the full configuration and requires the normal explicit confirmation before persistence. A failed validation keeps the editor open and displays the error in English. A canceled save or editor exit must preserve the previously persisted configuration byte-for-byte.
 
+Validation feedback is save-driven. Do not populate validation errors while the user is merely navigating or editing. After `s` or `Ctrl+S` fails validation, render the errors in the bottom footer and never inside the contextual inspector. Each action-related validation message must use the action's current display name, falling back to its kind label when no non-empty display name exists. After a displayed invalid field is changed and committed, revalidate the affected validation target and remove the error immediately when it is fixed. Do not introduce a new validation error in the footer until another save attempt.
+
 The action palette is opened with `a`. It may list capability-oriented action kinds because it is the creation surface, but once an action is selected, its inspector must be generated from its `ActionKind`. A field is shown only when it has meaning for that action and is supported by the domain model. Text fields open a focused text editor on `Enter`; enumerated or resource-selection fields open a modal selector with `Up`, `Down`, `Enter`, and `Esc`. Dependency editing uses a multi-select modal with explicit toggles.
 
 The contextual field contract for the initial action kinds is:

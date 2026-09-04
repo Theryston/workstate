@@ -53,12 +53,13 @@ pub fn render_selector(frame: &mut Frame<'_>, state: &SelectorState, theme: Them
 
 pub fn render_editor(frame: &mut Frame<'_>, state: &EditorState, theme: Theme) {
     let area = frame.area();
+    let footer_height = editor_footer_height(state);
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
             Constraint::Min(5),
-            Constraint::Length(1),
+            Constraint::Length(footer_height),
         ])
         .split(area);
 
@@ -86,16 +87,7 @@ pub fn render_editor(frame: &mut Frame<'_>, state: &EditorState, theme: Theme) {
     render_action_list(frame, state, theme, columns[0]);
     render_inspector(frame, state, theme, columns[1]);
 
-    let footer = Paragraph::new(
-        "↑↓ navigate  ← back  → edit  Enter edit  Tab focus  a add  d delete  Esc back/exit  s/Ctrl+S save",
-    )
-    .style(theme.muted_style())
-    .block(
-        Block::default()
-            .borders(Borders::TOP)
-            .border_style(theme.border_style()),
-    );
-    frame.render_widget(footer, sections[2]);
+    render_editor_footer(frame, state, theme, sections[2]);
 
     if state.palette_open {
         render_palette(frame, state, theme);
@@ -354,7 +346,7 @@ fn render_inspector(frame: &mut Frame<'_>, state: &EditorState, theme: Theme, ar
         return;
     };
     let fields = state.inspector_fields();
-    let mut items = fields
+    let items = fields
         .iter()
         .map(|field| {
             let label = format!("{:<22}", field.label());
@@ -364,24 +356,6 @@ fn render_inspector(frame: &mut Frame<'_>, state: &EditorState, theme: Theme, ar
             ]))
         })
         .collect::<Vec<_>>();
-    if let Some(notice) = &state.notice {
-        items.push(ListItem::new(Line::from(Span::styled(
-            format!("Notice  {notice}"),
-            theme.success_style(),
-        ))));
-    }
-    if !state.validation_errors.is_empty() {
-        items.push(ListItem::new(Line::from(Span::styled(
-            "Validation",
-            theme.error_style(),
-        ))));
-        items.extend(state.validation_errors.iter().map(|error| {
-            ListItem::new(Line::from(Span::styled(
-                format!("  {error}"),
-                theme.error_style(),
-            )))
-        }));
-    }
     let title = format!("Inspector · {}", action_label(action));
     let list = List::new(items)
         .block(focused_panel_block(
@@ -394,6 +368,55 @@ fn render_inspector(frame: &mut Frame<'_>, state: &EditorState, theme: Theme, ar
     let mut list_state = ListState::default();
     list_state.select(state.selected_inspector);
     frame.render_stateful_widget(list, area, &mut list_state);
+}
+
+fn editor_footer_height(state: &EditorState) -> u16 {
+    if state.validation_errors.is_empty() {
+        return if state.notice.is_some() { 2 } else { 1 };
+    }
+
+    let displayed_errors = state.validation_errors.len().min(5) as u16;
+    let overflow_line = u16::from(state.validation_errors.len() > 5);
+    2 + displayed_errors + overflow_line
+}
+
+fn render_editor_footer(frame: &mut Frame<'_>, state: &EditorState, theme: Theme, area: Rect) {
+    let mut lines = Vec::new();
+    if !state.validation_errors.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "Validation errors",
+            theme.error_style(),
+        )));
+        lines.extend(
+            state
+                .validation_errors
+                .iter()
+                .take(5)
+                .map(|error| Line::from(Span::styled(format!("  {error}"), theme.error_style()))),
+        );
+        if state.validation_errors.len() > 5 {
+            lines.push(Line::from(Span::styled(
+                format!("  ... and {} more", state.validation_errors.len() - 5),
+                theme.error_style(),
+            )));
+        }
+    } else if let Some(notice) = &state.notice {
+        lines.push(Line::from(Span::styled(
+            notice.clone(),
+            theme.warning_style(),
+        )));
+    }
+    lines.push(Line::from(Span::styled(
+        "↑↓ navigate  ← back  → edit  Enter edit  Tab focus  a add  d delete  Esc back/exit  s/Ctrl+S save",
+        theme.muted_style(),
+    )));
+
+    let footer = Paragraph::new(Text::from(lines)).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(theme.border_style()),
+    );
+    frame.render_widget(footer, area);
 }
 
 fn render_inspector_picker(frame: &mut Frame<'_>, picker: &InspectorPicker, theme: Theme) {
@@ -609,7 +632,8 @@ mod tests {
     };
 
     use super::{
-        Theme, render_delete_confirmation, render_editor, render_progress, render_selector,
+        Theme, render_delete_confirmation, render_editor, render_inspector, render_progress,
+        render_selector,
     };
     use crate::ui::{
         ActionProgressStatus, EnvironmentListItem, EnvironmentStatus, ProgressEvent, ProgressState,
@@ -701,13 +725,33 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(rendered.contains("Personal Blog"));
-        assert!(rendered.contains("Validation"));
+        assert!(rendered.contains("Validation errors"));
         assert!(rendered.contains("Open Project with Zed"));
         assert!(rendered.contains("Project path"));
         assert!(rendered.contains("Desktop workspace"));
         assert!(!rendered.contains("Working directory"));
         assert!(!rendered.contains("Execution mode"));
         assert!(!rendered.contains("Application"));
+
+        let backend = TestBackend::new(100, 16);
+        let Ok(mut terminal) = Terminal::new(backend) else {
+            return;
+        };
+        let result = terminal.draw(|frame| {
+            let area = frame.area();
+            render_inspector(frame, &state, Theme::new(false), area);
+        });
+        assert!(result.is_ok());
+        let Some(completed) = result.ok() else {
+            return;
+        };
+        let inspector = completed
+            .buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(!inspector.contains("Validation"));
     }
 
     #[test]

@@ -5,9 +5,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::{
     application::ports::{ConfigStore, DesktopWorkspaceSnapshot, FileSystem},
     domain::{
-        ActionId, ActionKind, ActionSpec, CommandSpec, ComposeSpec, ContainerSpec, EmulatorSpec,
-        EnvironmentConfig, ExecutionMode, ReadinessCheck, TilingPreference, WorkspaceId,
-        WorkspaceSpec, WorkspaceTarget,
+        ActionId, ActionKind, ActionSpec, CommandSpec, ComposeSpec, ContainerSpec, DomainError,
+        EmulatorSpec, EnvironmentConfig, ExecutionMode, ReadinessCheck, TilingPreference,
+        WorkspaceId, WorkspaceSpec, WorkspaceTarget,
     },
     error::{ErrorCategory, Result, WorkstateError},
     infrastructure::filesystem::PathResolver,
@@ -208,6 +208,15 @@ pub enum SaveOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum ValidationTarget {
+    Environment,
+    Action {
+        action_id: ActionId,
+        field: Option<InspectorField>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorState {
     pub configuration: EnvironmentConfig,
     pub live_workspaces: Vec<DesktopWorkspaceSnapshot>,
@@ -227,6 +236,8 @@ pub struct EditorState {
     pub validation_errors: Vec<String>,
     pub notice: Option<String>,
     pub dirty: bool,
+    validation_targets: Vec<ValidationTarget>,
+    validation_feedback_active: bool,
 }
 
 impl EditorState {
@@ -256,6 +267,8 @@ impl EditorState {
             validation_errors: Vec::new(),
             notice: None,
             dirty: false,
+            validation_targets: Vec::new(),
+            validation_feedback_active: false,
         }
     }
 
@@ -828,11 +841,12 @@ impl EditorState {
     pub fn validate(&mut self) -> Result<()> {
         match self.configuration.validate() {
             Ok(()) => {
-                self.validation_errors.clear();
+                self.clear_validation_errors();
                 Ok(())
             }
             Err(error) => {
-                self.validation_errors = vec![error.to_string()];
+                self.validation_feedback_active = true;
+                self.set_validation_error(&error);
                 Err(WorkstateError::from(error))
             }
         }
@@ -854,14 +868,14 @@ impl EditorState {
         match resolver.resolve_directory(&path) {
             Ok(resolved) => Ok(resolved),
             Err(error) => {
-                self.validation_errors.push(error.to_string());
+                self.record_notice(error.to_string());
                 Err(error)
             }
         }
     }
 
     pub fn review(&mut self) -> EditorReview {
-        let valid = self.validate().is_ok();
+        let valid = self.configuration.validate().is_ok();
         let dependencies = self
             .configuration
             .actions
@@ -921,7 +935,7 @@ impl EditorState {
                     if let Some(index) = self.selected_action
                         && let Err(error) = self.remove_action(index)
                     {
-                        self.validation_errors.push(error.to_string());
+                        self.record_notice(error.to_string());
                     }
                     EditorAction::None
                 }
@@ -1284,7 +1298,7 @@ impl EditorState {
                                     .set_selected_action_workspace_field(field, Some(workspace_id));
                                 self.record_error(result);
                             }
-                            Err(error) => self.validation_errors.push(error.to_string()),
+                            Err(error) => self.record_notice(error.to_string()),
                         }
                     }
                     InspectorChoiceValue::ExecutionMode(mode) => {
@@ -1360,7 +1374,7 @@ impl EditorState {
             }
             KeyCode::Enter => {
                 if let Err(error) = self.add_action_from_palette(self.selected_palette) {
-                    self.validation_errors.push(error.to_string());
+                    self.record_notice(error.to_string());
                 }
                 EditorAction::None
             }
@@ -1456,7 +1470,7 @@ impl EditorState {
                 .and_then(|action_id| self.set_action_readiness_delay(&action_id, value)),
         };
         if let Err(error) = result {
-            self.validation_errors.push(error.to_string());
+            self.record_notice(error.to_string());
         } else {
             self.mark_dirty();
         }
@@ -1674,6 +1688,98 @@ impl EditorState {
     fn mark_dirty(&mut self) {
         self.dirty = true;
         self.notice = None;
+        self.refresh_validation_errors();
+    }
+
+    fn clear_validation_errors(&mut self) {
+        self.validation_errors.clear();
+        self.validation_targets.clear();
+    }
+
+    fn set_validation_error(&mut self, error: &DomainError) {
+        self.validation_errors = vec![self.validation_message(error)];
+        self.validation_targets = vec![self.validation_target(error)];
+    }
+
+    fn refresh_validation_errors(&mut self) {
+        if !self.validation_feedback_active || self.validation_targets.is_empty() {
+            return;
+        }
+
+        let Some(error) = self.configuration.validate().err() else {
+            self.clear_validation_errors();
+            return;
+        };
+        let target = self.validation_target(&error);
+        if self
+            .validation_targets
+            .iter()
+            .any(|current| current == &target)
+        {
+            self.validation_errors = vec![self.validation_message(&error)];
+            self.validation_targets = vec![target];
+        } else {
+            self.clear_validation_errors();
+        }
+    }
+
+    fn validation_target(&self, error: &DomainError) -> ValidationTarget {
+        let Some(action_id) = validation_action_id(error) else {
+            return ValidationTarget::Environment;
+        };
+        let Some(action) = self
+            .configuration
+            .actions
+            .iter()
+            .find(|action| action.id.as_str() == action_id)
+        else {
+            return ValidationTarget::Environment;
+        };
+        ValidationTarget::Action {
+            action_id: action.id.clone(),
+            field: validation_field(error),
+        }
+    }
+
+    fn validation_message(&self, error: &DomainError) -> String {
+        if let DomainError::DependencyCycle { actions } = error {
+            let labels = actions
+                .split(", ")
+                .map(|action_id| self.action_name(action_id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return format!("action dependency cycle detected: {labels}");
+        }
+
+        let message = error.to_string();
+        let Some(action_id) = validation_action_id(error) else {
+            return message;
+        };
+        let Some(action) = self
+            .configuration
+            .actions
+            .iter()
+            .find(|action| action.id.as_str() == action_id)
+        else {
+            return message;
+        };
+        message.replace(
+            &format!("action {action_id}"),
+            &format!("action '{}'", action_label(action)),
+        )
+    }
+
+    fn record_notice(&mut self, message: String) {
+        self.notice = Some(message);
+    }
+
+    fn action_name(&self, action_id: &str) -> String {
+        self.configuration
+            .actions
+            .iter()
+            .find(|action| action.id.as_str() == action_id)
+            .map(action_label)
+            .unwrap_or_else(|| action_id.to_owned())
     }
 
     fn selected_action_id(&self) -> Result<ActionId> {
@@ -1710,7 +1816,7 @@ impl EditorState {
     fn open_workspace_picker(&mut self) {
         if self.live_workspaces.is_empty() {
             self.workspace_picker_target = None;
-            self.validation_errors.push(
+            self.record_notice(
                 "No live desktop workspaces are available to link from the current session."
                     .to_owned(),
             );
@@ -1750,7 +1856,7 @@ impl EditorState {
                     }
                     Err(error) => {
                         self.workspace_picker_target = target;
-                        self.validation_errors.push(error.to_string());
+                        self.record_notice(error.to_string());
                     }
                 }
             }
@@ -1820,7 +1926,7 @@ impl EditorState {
 
     fn record_error(&mut self, result: Result<()>) {
         if let Err(error) = result {
-            self.validation_errors.push(error.to_string());
+            self.record_notice(error.to_string());
         }
     }
 
@@ -1841,7 +1947,9 @@ impl EditorState {
 }
 
 fn action_label(action: &ActionSpec) -> String {
-    if let Some(label) = &action.display_label {
+    if let Some(label) = &action.display_label
+        && !label.is_empty()
+    {
         return label.clone();
     }
     match &action.kind {
@@ -1857,6 +1965,52 @@ fn action_label(action: &ActionSpec) -> String {
         ActionKind::WaitForCondition => "Wait for condition".to_owned(),
         ActionKind::VerifyResource => "Verify resource".to_owned(),
         ActionKind::Custom { name } => format!("Custom action: {name}"),
+    }
+}
+
+fn validation_action_id(error: &DomainError) -> Option<&str> {
+    match error {
+        DomainError::MissingDependency { action_id, .. }
+        | DomainError::SelfDependency { action_id }
+        | DomainError::DuplicateDependency { action_id, .. }
+        | DomainError::MissingWorkspaceReference { action_id, .. }
+        | DomainError::MissingActionParameter { action_id, .. }
+        | DomainError::InvalidActionParameter { action_id, .. }
+        | DomainError::InvalidActionTimeout { action_id, .. }
+        | DomainError::InvalidRetryPolicy { action_id }
+        | DomainError::InvalidExecutionMode { action_id, .. }
+        | DomainError::InvalidCommand { action_id, .. }
+        | DomainError::InvalidReadinessCheck { action_id, .. } => Some(action_id),
+        _ => None,
+    }
+}
+
+fn validation_field(error: &DomainError) -> Option<InspectorField> {
+    match error {
+        DomainError::MissingDependency { .. }
+        | DomainError::SelfDependency { .. }
+        | DomainError::DuplicateDependency { .. } => Some(InspectorField::Dependencies),
+        DomainError::MissingWorkspaceReference { .. } => Some(InspectorField::DesktopWorkspace),
+        DomainError::MissingActionParameter { parameter, .. }
+        | DomainError::InvalidActionParameter { parameter, .. } => match parameter.as_str() {
+            "display_label" => Some(InspectorField::ActionLabel),
+            "application" => Some(InspectorField::Application),
+            "project_path" => Some(InspectorField::ProjectPath),
+            "working_directory" => Some(InspectorField::WorkingDirectory),
+            "command" => Some(InspectorField::Command),
+            "workspace_id" => Some(InspectorField::WorkspaceTarget),
+            "desktop_workspace" => Some(InspectorField::DesktopWorkspace),
+            "container" | "container.name" => Some(InspectorField::ContainerName),
+            "compose" | "compose.project_name" => Some(InspectorField::ComposeProjectName),
+            "emulator" | "emulator.avd" => Some(InspectorField::EmulatorAvd),
+            "readiness_checks" => Some(InspectorField::ReadinessDelay),
+            _ => None,
+        },
+        DomainError::InvalidActionTimeout { .. } | DomainError::InvalidRetryPolicy { .. } => None,
+        DomainError::InvalidExecutionMode { .. } => Some(InspectorField::ExecutionMode),
+        DomainError::InvalidCommand { .. } => Some(InspectorField::Command),
+        DomainError::InvalidReadinessCheck { .. } => Some(InspectorField::ReadinessDelay),
+        _ => None,
     }
 }
 
@@ -2021,6 +2175,47 @@ mod tests {
                 .is_ok()
         );
         assert!(editor.validate().is_err());
+    }
+
+    #[test]
+    fn validation_feedback_is_deferred_and_uses_the_action_name() {
+        let Some(mut configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let Some(mut action) = ActionSpec::new("open-project", ActionKind::OpenProject).ok() else {
+            return;
+        };
+        action.display_label = Some("Blog editor".to_owned());
+        assert!(configuration.add_action(action).is_ok());
+        let mut editor = EditorState::new(configuration, EditorMode::Create);
+
+        assert!(editor.validation_errors.is_empty());
+        assert!(editor.validate().is_err());
+        assert_eq!(editor.validation_errors.len(), 1);
+        assert!(editor.validation_errors[0].contains("Blog editor"));
+        assert!(!editor.validation_errors[0].contains("open-project"));
+    }
+
+    #[test]
+    fn changing_the_invalid_field_revalidates_and_removes_its_error() {
+        let Some(mut configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let Some(action) = ActionSpec::new("open-project", ActionKind::OpenProject).ok() else {
+            return;
+        };
+        let action_id = action.id.clone();
+        assert!(configuration.add_action(action).is_ok());
+        let mut editor = EditorState::new(configuration, EditorMode::Create);
+
+        assert!(editor.validate().is_err());
+        assert!(!editor.validation_errors.is_empty());
+        assert!(
+            editor
+                .set_action_project_path(&action_id, Some("~/Projects/blog".to_owned()))
+                .is_ok()
+        );
+        assert!(editor.validation_errors.is_empty());
     }
 
     #[test]
