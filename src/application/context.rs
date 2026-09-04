@@ -17,7 +17,12 @@ use crate::{
         process::{BoxFuture, ProcessOutput, ProcessRequest, ProcessRunner},
         terminal::TerminalBackend,
     },
+    domain::{EnvironmentConfig, EnvironmentSlug, RuntimeState},
     error::{ErrorCategory, Result, WorkstateError},
+    infrastructure::{
+        filesystem::local::LocalFileSystem,
+        persistence::{TomlConfigStore, TomlStateStore, WorkstatePaths},
+    },
     integrations::IntegrationRegistry,
     platform::PlatformInfo,
 };
@@ -95,7 +100,29 @@ impl AppContext {
 
     pub fn bootstrap() -> Result<Self> {
         initialize_tracing()?;
-        Ok(Self::with_noop_dependencies())
+        let file_system: Arc<dyn FileSystem> = Arc::new(LocalFileSystem);
+        let paths = WorkstatePaths::from_file_system(file_system.as_ref())?;
+        let config_store: Arc<dyn ConfigStore> = Arc::new(TomlConfigStore::new(
+            Arc::clone(&file_system),
+            paths.clone(),
+        ));
+        let state_store: Arc<dyn StateStore> =
+            Arc::new(TomlStateStore::new(Arc::clone(&file_system), paths));
+
+        Ok(Self::new(AppDependencies {
+            config_store,
+            state_store,
+            file_system,
+            process_runner: Arc::new(UnavailableBackend::new("process runner")),
+            clock: Arc::new(SystemClock),
+            platform_detector: Arc::new(UnavailableBackend::new("platform detector")),
+            desktop_backend: Arc::new(UnavailableBackend::new("desktop backend")),
+            terminal_backend: Arc::new(UnavailableBackend::new("terminal backend")),
+            container_backend: Arc::new(UnavailableBackend::new("container backend")),
+            editor_backend: Arc::new(UnavailableBackend::new("editor backend")),
+            emulator_backend: Arc::new(UnavailableBackend::new("emulator backend")),
+            integration_registry: Arc::new(IntegrationRegistry::new()),
+        }))
     }
 
     pub fn config_store(&self) -> &dyn ConfigStore {
@@ -207,8 +234,16 @@ impl FileSystem for UnavailableBackend {
         Err(self.error(ErrorCategory::Persistence, "path lookup"))
     }
 
+    fn is_directory(&self, _path: &Path) -> Result<bool> {
+        Err(self.error(ErrorCategory::Persistence, "directory type lookup"))
+    }
+
     fn create_directory_all(&self, _path: &Path) -> Result<()> {
         Err(self.error(ErrorCategory::Persistence, "directory creation"))
+    }
+
+    fn list_directories(&self, _path: &Path) -> Result<Vec<PathBuf>> {
+        Err(self.error(ErrorCategory::Persistence, "directory listing"))
     }
 
     fn read(&self, _path: &Path) -> Result<Vec<u8>> {
@@ -219,35 +254,55 @@ impl FileSystem for UnavailableBackend {
         Err(self.error(ErrorCategory::Persistence, "file write"))
     }
 
+    fn sync(&self, _path: &Path) -> Result<()> {
+        Err(self.error(ErrorCategory::Persistence, "file synchronization"))
+    }
+
+    fn rename(&self, _source: &Path, _target: &Path) -> Result<()> {
+        Err(self.error(ErrorCategory::Persistence, "file replacement"))
+    }
+
+    fn canonicalize(&self, _path: &Path) -> Result<PathBuf> {
+        Err(self.error(ErrorCategory::Persistence, "path canonicalization"))
+    }
+
     fn remove(&self, _path: &Path) -> Result<()> {
         Err(self.error(ErrorCategory::Persistence, "path removal"))
     }
 }
 
 impl ConfigStore for UnavailableBackend {
-    fn load(&self, _environment: &str) -> Result<Option<Vec<u8>>> {
+    fn load(&self, _environment: &EnvironmentSlug) -> Result<Option<EnvironmentConfig>> {
         Err(self.error(ErrorCategory::Persistence, "configuration load"))
     }
 
-    fn save(&self, _environment: &str, _contents: &[u8]) -> Result<()> {
+    fn create(&self, _configuration: &EnvironmentConfig) -> Result<()> {
+        Err(self.error(ErrorCategory::Persistence, "configuration creation"))
+    }
+
+    fn save(&self, _configuration: &EnvironmentConfig) -> Result<()> {
         Err(self.error(ErrorCategory::Persistence, "configuration save"))
     }
 
-    fn delete(&self, _environment: &str) -> Result<()> {
+    fn delete(&self, _environment: &EnvironmentSlug) -> Result<()> {
         Err(self.error(ErrorCategory::Persistence, "configuration deletion"))
+    }
+
+    fn list(&self) -> Result<Vec<EnvironmentSlug>> {
+        Err(self.error(ErrorCategory::Persistence, "configuration listing"))
     }
 }
 
 impl StateStore for UnavailableBackend {
-    fn load(&self, _environment: &str) -> Result<Option<Vec<u8>>> {
+    fn load(&self, _environment: &EnvironmentSlug) -> Result<Option<RuntimeState>> {
         Err(self.error(ErrorCategory::Persistence, "runtime state load"))
     }
 
-    fn save(&self, _environment: &str, _contents: &[u8]) -> Result<()> {
+    fn save(&self, _state: &RuntimeState) -> Result<()> {
         Err(self.error(ErrorCategory::Persistence, "runtime state save"))
     }
 
-    fn delete(&self, _environment: &str) -> Result<()> {
+    fn delete(&self, _environment: &EnvironmentSlug) -> Result<()> {
         Err(self.error(ErrorCategory::Persistence, "runtime state deletion"))
     }
 }

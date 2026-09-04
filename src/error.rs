@@ -6,6 +6,8 @@ use std::{
 
 use thiserror::Error;
 
+use crate::domain::DomainError;
+
 pub type Result<T> = std::result::Result<T, WorkstateError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,5 +94,11 @@ impl WorkstateError {
             ErrorCategory::Cli => 2,
             _ => 1,
         }
+    }
+}
+
+impl From<DomainError> for WorkstateError {
+    fn from(source: DomainError) -> Self {
+        Self::with_source(ErrorCategory::Domain, source.to_string(), source)
     }
 }
