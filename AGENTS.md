@@ -16,7 +16,7 @@ The user defines a named environment once. The environment describes the complet
 
 When the user runs an environment, `workstate` reconciles the desired state with the actual state of the computer. It detects what is already correct, starts or opens only what is missing, waits for required readiness conditions, applies the requested desktop configuration, and verifies the result. The main `workstate` process remains visible only for the setup and reconciliation phase. Once setup is complete, it exits and leaves persistent background processes running independently.
 
-The product is not a shell-script wrapper. The legacy scripts are a behavioral reference only. The Rust implementation must use explicit domain models, typed state, injected ports, capability-based backends, transactional cleanup, and a modern terminal user interface.
+The product is not a shell-script wrapper. Earlier scripts are product inspiration only and are not a supported input format, runtime dependency, or compatibility target. The Rust implementation must use explicit domain models, typed state, injected ports, capability-based backends, transactional cleanup, and a modern terminal user interface.
 
 ## 3. Initial support boundary
 
@@ -29,7 +29,7 @@ Desktop environment: COSMIC
 Terminal multiplexer: tmux
 ```
 
-The first release must include support for all legacy capabilities:
+The first release must include all capabilities defined by the current product specification:
 
 - COSMIC desktop workspaces;
 - COSMIC window discovery and movement;
@@ -536,7 +536,7 @@ Free-form shell syntax such as pipes, redirects, command substitution, and chain
 
 ### 8.8 Readiness checks
 
-Readiness checks are reusable action capabilities. The first release must support the checks represented by the legacy workflow:
+Readiness checks are reusable action capabilities. The first release must support these check types:
 
 ```text
 No wait
@@ -885,7 +885,7 @@ All Workstate data belongs under:
 ~/.workstate
 ```
 
-Do not use the old `code-fullstack` directory as the canonical runtime location. Do not split environment configuration and state across unrelated roots.
+Do not split environment configuration and state across unrelated roots. All Workstate data belongs under the per-environment directories described below.
 
 ### 15.2 Per-environment directory
 
@@ -937,27 +937,6 @@ Logs must:
 - avoid secrets and sensitive environment values;
 - remain available after a failed rollback;
 - be summarized in the final TUI output.
-
-### 15.6 Legacy migration
-
-The original scripts stored configuration in:
-
-```text
-~/.config/code-fullstack/environments/*.conf
-~/.local/state/code-fullstack/environments/*/state.sh
-```
-
-The Rust implementation must provide a safe migration path when legacy data is present. Migration must:
-
-- recognize known legacy fields;
-- convert them to `environment.toml` and `state.toml` under `~/.workstate/<slug>/`;
-- preserve paths and names where possible;
-- preserve ownership information when it can be determined;
-- never execute or source the shell files;
-- never run arbitrary commands found in a legacy file during parsing;
-- report unsupported legacy fields clearly in English;
-- use atomic writes;
-- avoid deleting the original legacy data until a separate, explicit cleanup policy exists.
 
 ## 16. Rust architecture
 
@@ -1039,8 +1018,7 @@ src/
 │   │   ├── mod.rs
 │   │   ├── paths.rs
 │   │   ├── toml_store.rs
-│   │   ├── atomic_write.rs
-│   │   └── migration.rs
+│   │   └── atomic_write.rs
 │   └── time/
 │       ├── mod.rs
 │       └── system_clock.rs
@@ -1412,7 +1390,7 @@ tests/
 ├── cli.rs                     command behavior and exit codes
 ├── reconciliation.rs          graph planning, idempotency, rollback
 ├── compatibility.rs           platform detection and support matrix
-├── persistence.rs             TOML, atomic writes, migration
+├── persistence.rs             TOML and atomic writes
 └── integrations/
     ├── cosmic.rs              COSMIC contract tests with fakes
     ├── tmux.rs                tmux contract tests with fakes
@@ -1456,11 +1434,7 @@ Use `insta` snapshots for stable TUI states and important output. Snapshots must
 
 Update snapshots intentionally and review every changed line.
 
-### 21.4 Migration tests
-
-Keep fixtures representing the legacy `.conf` and `state.sh` formats. Verify that migration parses data without executing shell code, writes the new TOML structure atomically, and does not mutate the original legacy files unexpectedly.
-
-### 21.5 Live integration tests
+### 21.4 Live integration tests
 
 Tests that call a real COSMIC session, tmux server, Docker daemon, Zed process, or Android Emulator must be explicitly opt-in and must never run in the normal test suite or CI by accident. Use a clearly named environment gate and document the required host setup.
 
@@ -1508,7 +1482,7 @@ cargo test --all-targets
 cargo build --release
 ```
 
-Run snapshot verification when TUI or output code changes. Run migration and fake-backend integration tests when persistence or lifecycle code changes.
+Run snapshot verification when TUI or output code changes. Run persistence and fake-backend integration tests when persistence or lifecycle code changes.
 
 Before considering a change complete, verify:
 
@@ -1578,11 +1552,11 @@ A feature is complete only when all applicable items are true:
 - performance impact is measured when the feature affects startup or planning;
 - the feature does not require unrelated integrations to be modified.
 
-## 26. Legacy behavior reference
+## 26. Prior scripts as non-compatibility context
 
-The original shell workflow is useful for preserving behavior, but it is not an architectural template.
+Earlier shell scripts explain the original product idea, but they are not part of the supported input, runtime, or migration surface. Do not add compatibility code for them unless the product specification explicitly changes.
 
-The legacy flow includes:
+They illustrate capabilities such as:
 
 - creating or selecting saved environments;
 - storing environment configuration and runtime state;
@@ -1600,7 +1574,7 @@ The legacy flow includes:
 - stopping tmux, emulator, Zed windows, containers, Compose stacks, and Docker Desktop according to ownership and sharing rules;
 - removing saved environment configuration.
 
-The Rust implementation must retain the useful behavior while replacing:
+The Rust implementation should preserve the intended product behavior while using:
 
 - shell-sourced state with typed TOML;
 - parallel arrays with structured collections;
