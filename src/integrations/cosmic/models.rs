@@ -77,7 +77,7 @@ pub fn decode_snapshot(
             validate_text(name, "workspace name", "get-workspaces")?;
         }
         let name = workspace.name.filter(|value| !value.is_empty());
-        let tiling_enabled = workspace.tiling.map(tiling_value).transpose()?;
+        let tiling_enabled = workspace.tiling.map(tiling_value).transpose()?.flatten();
         desktop_workspaces.push(DesktopWorkspaceSnapshot {
             identity,
             name,
@@ -120,12 +120,8 @@ pub fn decode_snapshot(
                 detail: format!("window identifier '{identity}' appeared more than once"),
             });
         }
-        if let Some(application) = &window.application {
-            validate_text(application, "window application", "get-toplevels")?;
-        }
-        if let Some(title) = &window.title {
-            validate_text(title, "window title", "get-toplevels")?;
-        }
+        let application = optional_text(window.application, "window application", "get-toplevels")?;
+        let title = optional_text(window.title, "window title", "get-toplevels")?;
         for state in &window.state {
             validate_text(state, "window state", "get-toplevels")?;
         }
@@ -158,18 +154,16 @@ pub fn decode_snapshot(
             [identity] => Some(identity.clone()),
             _ => None,
         };
-        if let Some(path) = &window.project_path {
-            validate_text(path, "project path", "get-toplevels")?;
-        }
+        let project_path = optional_text(window.project_path, "project path", "get-toplevels")?;
         let focused = window
             .state
             .iter()
             .any(|state| state.eq_ignore_ascii_case("activated"));
         desktop_windows.push(DesktopWindowSnapshot {
             identity,
-            application: window.application,
-            title: window.title,
-            project_path: window.project_path,
+            application,
+            title,
+            project_path,
             workspace_identity,
             focused,
         });
@@ -189,11 +183,14 @@ fn value_string(value: Option<&Value>) -> Option<String> {
     }
 }
 
-fn tiling_value(value: CosmicTilingModel) -> Result<bool, CosmicError> {
+fn tiling_value(value: CosmicTilingModel) -> Result<Option<bool>, CosmicError> {
     match value {
-        CosmicTilingModel::Enabled(value) => Ok(value),
-        CosmicTilingModel::State(value) if value.eq_ignore_ascii_case("enabled") => Ok(true),
-        CosmicTilingModel::State(value) if value.eq_ignore_ascii_case("disabled") => Ok(false),
+        CosmicTilingModel::Enabled(value) => Ok(Some(value)),
+        CosmicTilingModel::State(value) if value.eq_ignore_ascii_case("enabled") => Ok(Some(true)),
+        CosmicTilingModel::State(value) if value.eq_ignore_ascii_case("disabled") => {
+            Ok(Some(false))
+        }
+        CosmicTilingModel::State(value) if value.eq_ignore_ascii_case("unknown") => Ok(None),
         CosmicTilingModel::State(value) => Err(CosmicError::MalformedOutput {
             operation: "get-workspaces".to_owned(),
             detail: format!("unsupported tiling state '{value}'"),
@@ -209,4 +206,19 @@ fn validate_text(value: &str, field: &str, operation: &str) -> Result<(), Cosmic
         });
     }
     Ok(())
+}
+
+fn optional_text(
+    value: Option<String>,
+    field: &str,
+    operation: &str,
+) -> Result<Option<String>, CosmicError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    validate_text(&value, field, operation)?;
+    Ok(Some(value))
 }

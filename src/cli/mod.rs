@@ -68,13 +68,16 @@ async fn dispatch(context: &AppContext, invocation: Invocation) -> Result<()> {
             let slug = resolve_environment_slug(environment.as_str())?;
             run_environment(context, &slug, &invocation.options, &policy, &mut output).await
         }
-        Command::Add { environment } => add_environment(
-            context,
-            environment.as_str(),
-            &invocation.options,
-            &policy,
-            &mut output,
-        ),
+        Command::Add { environment } => {
+            add_environment(
+                context,
+                environment.as_str(),
+                &invocation.options,
+                &policy,
+                &mut output,
+            )
+            .await
+        }
         Command::Stop { environment } => {
             stop_environment(
                 context,
@@ -157,7 +160,7 @@ async fn run_environment(
     policy.write_message(output, &message)
 }
 
-fn add_environment(
+async fn add_environment(
     context: &AppContext,
     argument: &str,
     options: &args::GlobalOptions,
@@ -181,7 +184,14 @@ fn add_environment(
             EditorMode::Create,
         ),
     };
-    let editor = EditorState::new(configuration, mode);
+    let editor = match context.desktop_backend().snapshot().await {
+        Ok(snapshot) => {
+            EditorState::new(configuration, mode).with_live_workspaces(snapshot.workspaces)
+        }
+        Err(error) => {
+            EditorState::new(configuration, mode).with_workspace_observation_error(error.render())
+        }
+    };
     match edit_environment(editor, options.no_color)? {
         EditorOutcome::Cancelled => Ok(()),
         EditorOutcome::Saved(configuration) => {

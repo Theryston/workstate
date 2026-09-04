@@ -97,6 +97,10 @@ impl ProcessRunner for LocalProcessRunner {
                     )
                 })?;
             if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if stderr.to_ascii_lowercase().contains("no such process") {
+                    return Ok(());
+                }
                 return Err(WorkstateError::new(
                     ErrorCategory::Process,
                     "the operating system rejected the background process termination request",

@@ -14,14 +14,14 @@ use workstate::{
     application::{
         planner::{ActionHandler, CancellationToken, ObservationStatus},
         ports::{
-            BackgroundProcess, BoxFuture, DesktopBackend, DesktopSnapshot, DesktopWindowSnapshot,
-            DesktopWorkspaceSnapshot, EditorBackend, ProcessOutput, ProcessRequest, ProcessRunner,
-            ensure_workspace, resolve_workspace_target,
+            BackgroundProcess, BoxFuture, DesktopBackend, DesktopOperationOutcome, DesktopSnapshot,
+            DesktopWindowSnapshot, DesktopWorkspaceSnapshot, EditorBackend, ProcessOutput,
+            ProcessRequest, ProcessRunner, ensure_workspace, resolve_workspace_target,
         },
     },
     domain::{
         ActionKind, ActionSpec, OwnershipStatus, ResourceIdentity, ResourceKind, ResourceRecord,
-        TilingPreference, WorkspaceId, WorkspaceReference, WorkspaceTarget,
+        TilingPreference, Timeout, WorkspaceId, WorkspaceReference, WorkspaceTarget,
     },
     error::{ErrorCategory, Result, WorkstateError},
     infrastructure::filesystem::local::LocalFileSystem,
@@ -64,6 +64,10 @@ impl FixtureProcessRunner {
             launch: Some((desktop, project_path)),
             stopped: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    fn for_zed_launch_without_project_metadata(desktop: FakeDesktop) -> Self {
+        Self::for_zed_launch(desktop, PathBuf::new())
     }
 
     fn calls(&self) -> Result<Vec<ProcessRequest>> {
@@ -129,7 +133,8 @@ impl ProcessRunner for FixtureProcessRunner {
                     identity: "zed-launched".to_owned(),
                     application: Some("dev.zed.Zed".to_owned()),
                     title: Some("Launched project".to_owned()),
-                    project_path: Some(project_path.display().to_string()),
+                    project_path: (!project_path.as_os_str().is_empty())
+                        .then(|| project_path.display().to_string()),
                     workspace_identity: Some("main".to_owned()),
                     focused: false,
                 })?;
@@ -373,6 +378,35 @@ fn cosmic_output_is_parsed_at_one_typed_boundary() -> TestResult {
 }
 
 #[test]
+fn unknown_cosmic_tiling_does_not_reject_the_workspace_snapshot() -> TestResult {
+    let snapshot = workstate::integrations::cosmic::models::decode_snapshot(
+        include_bytes!("fixtures/cosmic/workspaces_unknown_tiling.json"),
+        br#"[]"#,
+    )?;
+    assert_eq!(snapshot.workspaces.len(), 1);
+    assert_eq!(snapshot.workspaces[0].tiling_enabled, None);
+    Ok(())
+}
+
+#[test]
+fn empty_cosmic_window_application_is_treated_as_missing() -> TestResult {
+    let snapshot = workstate::integrations::cosmic::models::decode_snapshot(
+        include_bytes!("fixtures/cosmic/workspaces.json"),
+        br#"[
+            {
+                "identifier": "window-without-application",
+                "app_id": "",
+                "title": "Desktop surface",
+                "state": [],
+                "workspaces": ["1"]
+            }
+        ]"#,
+    )?;
+    assert_eq!(snapshot.windows[0].application, None);
+    Ok(())
+}
+
+#[test]
 fn malformed_cosmic_output_is_rejected() -> TestResult {
     let result = workstate::integrations::cosmic::models::decode_snapshot(
         include_bytes!("fixtures/cosmic/malformed.json"),
@@ -446,6 +480,33 @@ async fn zed_marks_a_new_window_owned_only_after_observation() -> TestResult {
     assert_eq!(
         calls[0].arguments,
         vec!["-n".to_owned(), project_path.display().to_string()]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn zed_correlates_a_new_window_without_project_metadata() -> TestResult {
+    let directory = tempdir()?;
+    let project_path = directory.path().to_path_buf();
+    let desktop = FakeDesktop::new(DesktopSnapshot {
+        workspaces: vec![workspace("main", "Main", 0, true, true)],
+        windows: Vec::new(),
+    });
+    let runner = FixtureProcessRunner::for_zed_launch_without_project_metadata(desktop.clone());
+    let backend = ZedBackend::new(
+        Arc::new(runner.clone()),
+        Arc::new(desktop),
+        Arc::new(LocalFileSystem),
+    )
+    .with_timing(Duration::from_millis(1), Duration::from_millis(100));
+    let outcome = backend
+        .open_project(project_path, CancellationToken::new())
+        .await?;
+    assert!(outcome.owned);
+    assert_eq!(outcome.window.identity, "zed-launched");
+    assert_eq!(
+        outcome.status,
+        workstate::application::ports::EditorOperationStatus::Launched
     );
     Ok(())
 }
@@ -673,6 +734,110 @@ async fn stop_closes_owned_zed_windows_and_preserves_shared_windows() -> TestRes
     let snapshot = desktop.state()?;
     assert!(snapshot.window("zed-owned").is_none());
     assert!(snapshot.window("zed-shared").is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn zed_cleanup_uses_persisted_window_identity_without_project_metadata() -> TestResult {
+    let desktop = FakeDesktop::new(DesktopSnapshot {
+        workspaces: vec![workspace("main", "Main", 0, true, true)],
+        windows: vec![DesktopWindowSnapshot {
+            identity: "zed-owned".to_owned(),
+            application: Some("dev.zed.Zed".to_owned()),
+            title: Some("Owned".to_owned()),
+            project_path: None,
+            workspace_identity: Some("main".to_owned()),
+            focused: false,
+        }],
+    });
+    let editor = Arc::new(ZedBackend::new(
+        Arc::new(FixtureProcessRunner::for_cosmic(&[], &[])),
+        Arc::new(desktop.clone()),
+        Arc::new(LocalFileSystem),
+    ));
+    let handler = ZedProjectHandler::new(editor, Arc::new(desktop.clone()));
+    let action = ActionSpec::new("open-project", ActionKind::OpenProject)?;
+    let resource = ResourceRecord::new(
+        ResourceIdentity::new(ResourceKind::DesktopWindow, "zed-owned")?,
+        OwnershipStatus::CreatedByCurrentRun,
+    );
+
+    let observation = handler
+        .observe_for_cleanup(
+            &action,
+            std::slice::from_ref(&resource),
+            CancellationToken::new(),
+        )
+        .await?;
+    assert_eq!(observation.resources, vec![resource.clone()]);
+
+    handler
+        .stop(&action, &[resource], CancellationToken::new())
+        .await?;
+    assert!(desktop.state()?.window("zed-owned").is_none());
+    Ok(())
+}
+
+#[derive(Clone)]
+struct StickyCloseDesktop {
+    snapshot: DesktopSnapshot,
+}
+
+impl DesktopBackend for StickyCloseDesktop {
+    fn snapshot<'a>(&'a self) -> BoxFuture<'a, Result<DesktopSnapshot>> {
+        let snapshot = self.snapshot.clone();
+        Box::pin(async move { Ok(snapshot) })
+    }
+
+    fn close_window<'a>(
+        &'a self,
+        window_identity: &'a str,
+    ) -> BoxFuture<'a, Result<DesktopOperationOutcome>> {
+        Box::pin(async move {
+            Ok(DesktopOperationOutcome::changed(Some(
+                window_identity.to_owned(),
+            )))
+        })
+    }
+}
+
+#[tokio::test]
+async fn zed_stop_fails_when_cosmic_does_not_remove_the_window() -> TestResult {
+    let desktop = StickyCloseDesktop {
+        snapshot: DesktopSnapshot {
+            workspaces: vec![workspace("main", "Main", 0, true, true)],
+            windows: vec![DesktopWindowSnapshot {
+                identity: "zed-stuck".to_owned(),
+                application: Some("dev.zed.Zed".to_owned()),
+                title: Some("Stuck".to_owned()),
+                project_path: None,
+                workspace_identity: Some("main".to_owned()),
+                focused: false,
+            }],
+        },
+    };
+    let editor = Arc::new(
+        ZedBackend::new(
+            Arc::new(FixtureProcessRunner::for_cosmic(&[], &[])),
+            Arc::new(desktop.clone()),
+            Arc::new(LocalFileSystem),
+        )
+        .with_timing(Duration::from_millis(1), Duration::from_millis(1)),
+    );
+    let handler = ZedProjectHandler::new(editor, Arc::new(desktop));
+    let mut action = ActionSpec::new("open-project", ActionKind::OpenProject)?;
+    action.timeout = Some(Timeout::new(1)?);
+    let resource = ResourceRecord::new(
+        ResourceIdentity::new(ResourceKind::DesktopWindow, "zed-stuck")?,
+        OwnershipStatus::CreatedByCurrentRun,
+    );
+
+    let result = handler
+        .stop(&action, &[resource], CancellationToken::new())
+        .await;
+    assert!(result.is_err());
+    let error = result.err().ok_or("missing close verification error")?;
+    assert!(error.message.contains("did not close"));
     Ok(())
 }
 

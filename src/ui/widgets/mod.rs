@@ -99,7 +99,7 @@ pub fn render_editor(frame: &mut Frame<'_>, state: &EditorState, theme: Theme) {
     }
 
     let footer = Paragraph::new(
-        "↑↓ move  Tab panel  a add  e label/name  w directory  o app  p project  c command  v tool  r check  m mode  g workspace  x target  +/- dependencies  s save",
+        "↑↓ move  Tab panel  a add  Enter/l link COSMIC workspace  n new target  e label/name  w directory  o app  p project  c command  v tool  r check  m mode  g workspace  x target  +/- dependencies  s save",
     )
     .style(theme.muted_style())
     .block(
@@ -124,6 +124,9 @@ pub fn render_editor(frame: &mut Frame<'_>, state: &EditorState, theme: Theme) {
             "y confirm · n or Esc cancel",
             theme,
         );
+    }
+    if state.workspace_picker_open {
+        render_live_workspace_picker(frame, state, theme);
     }
 }
 
@@ -299,7 +302,7 @@ fn render_action_list(frame: &mut Frame<'_>, state: &EditorState, theme: Theme, 
 }
 
 fn render_workspace_list(frame: &mut Frame<'_>, state: &EditorState, theme: Theme, area: Rect) {
-    let items = state
+    let mut items = state
         .configuration
         .workspaces
         .iter()
@@ -317,8 +320,81 @@ fn render_workspace_list(frame: &mut Frame<'_>, state: &EditorState, theme: Them
             ]))
         })
         .collect::<Vec<_>>();
-    let list = List::new(items).block(panel_block("Workspaces", theme));
+    if !state.live_workspaces.is_empty() {
+        if !items.is_empty() {
+            items.push(ListItem::new(Span::styled(
+                "COSMIC workspaces",
+                theme.muted_style(),
+            )));
+        }
+        items.extend(state.live_workspaces.iter().map(|workspace| {
+            let label = workspace
+                .name
+                .as_deref()
+                .unwrap_or(workspace.identity.as_str());
+            let active = if workspace.focused { "  active" } else { "" };
+            let tiling = workspace
+                .tiling_enabled
+                .map(|enabled| if enabled { "on" } else { "off" })
+                .unwrap_or("unknown");
+            ListItem::new(Line::from(vec![
+                Span::styled("• ", theme.muted_style()),
+                Span::styled(label.to_owned(), theme.text_style()),
+                Span::styled(format!("  #{}", workspace.identity), theme.muted_style()),
+                Span::styled(active, theme.success_style()),
+                Span::styled(format!("  tiling {tiling}"), theme.muted_style()),
+            ]))
+        }));
+    } else if let Some(error) = &state.workspace_observation_error {
+        items.push(ListItem::new(Span::styled(
+            "COSMIC workspaces unavailable",
+            theme.warning_style(),
+        )));
+        items.push(ListItem::new(Span::styled(error, theme.error_style())));
+    } else if items.is_empty() {
+        items.push(ListItem::new(Span::styled(
+            "No workspaces configured yet.",
+            theme.muted_style(),
+        )));
+    }
+    let list = List::new(items).block(panel_block("Workspaces · Enter link live", theme));
     frame.render_widget(list, area);
+}
+
+fn render_live_workspace_picker(frame: &mut Frame<'_>, state: &EditorState, theme: Theme) {
+    let area = centered_rect(70, 66, frame.area());
+    frame.render_widget(Clear, area);
+    let items = state
+        .live_workspaces
+        .iter()
+        .map(|workspace| {
+            let label = workspace
+                .name
+                .as_deref()
+                .unwrap_or(workspace.identity.as_str());
+            let active = if workspace.focused { " · active" } else { "" };
+            let tiling = workspace
+                .tiling_enabled
+                .map(|enabled| if enabled { "on" } else { "off" })
+                .unwrap_or("unknown");
+            ListItem::new(Line::from(vec![
+                Span::styled(label.to_owned(), theme.text_style()),
+                Span::styled(format!("  #{}", workspace.identity), theme.muted_style()),
+                Span::styled(active, theme.success_style()),
+                Span::styled(format!(" · tiling {tiling}"), theme.muted_style()),
+            ]))
+        })
+        .collect::<Vec<_>>();
+    let list = List::new(items)
+        .block(panel_block(
+            "Link COSMIC workspace · Enter confirm · Esc cancel",
+            theme,
+        ))
+        .highlight_style(theme.selected_style())
+        .highlight_symbol("▸ ");
+    let mut list_state = ListState::default();
+    list_state.select(state.selected_live_workspace);
+    frame.render_stateful_widget(list, area, &mut list_state);
 }
 
 fn render_inspector(frame: &mut Frame<'_>, state: &EditorState, theme: Theme, area: Rect) {

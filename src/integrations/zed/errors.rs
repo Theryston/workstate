@@ -12,6 +12,8 @@ pub enum ZedError {
     AmbiguousProject { project: String, matches: usize },
     #[error("Zed project '{project}' did not become observable before the timeout")]
     WindowTimeout { project: String },
+    #[error("Zed window '{window}' did not close before the timeout")]
+    WindowCloseTimeout { window: String },
 }
 
 impl ZedError {

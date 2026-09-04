@@ -279,7 +279,12 @@ impl<'a> LifecycleEngine<'a> {
             mutations_by_action.remove(action_id);
 
             let current_resources = self
-                .observe_cleanup_resources(action, handler.clone(), cancellation.clone())
+                .observe_cleanup_resources(
+                    action,
+                    handler.clone(),
+                    &resources,
+                    cancellation.clone(),
+                )
                 .await;
             let observed = match current_resources {
                 Ok(observation) => observation,
@@ -501,10 +506,11 @@ impl<'a> LifecycleEngine<'a> {
         &self,
         action: &ActionSpec,
         handler: Arc<dyn crate::application::planner::ActionHandler>,
+        resources: &[ResourceRecord],
         cancellation: CancellationToken,
     ) -> Result<ActionObservation> {
         run_with_timeout(
-            handler.observe(action, cancellation.clone()),
+            handler.observe_for_cleanup(action, resources, cancellation.clone()),
             action
                 .timeout
                 .as_ref()

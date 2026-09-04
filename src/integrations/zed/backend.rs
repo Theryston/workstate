@@ -241,6 +241,33 @@ impl ZedBackend {
                         process_identity: owned.then_some(process.identity.clone()),
                     });
                 }
+                let new_windows = observed
+                    .iter()
+                    .filter(|window| !before_ids.contains(&window.identity))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if new_windows.len() == 1 {
+                    let window = new_windows.into_iter().next().ok_or_else(|| {
+                        ZedError::OperationFailed {
+                            operation: "observe-launched-project".to_owned(),
+                            detail: "the newly launched Zed window disappeared before it could be recorded".to_owned(),
+                        }
+                        .into_workstate()
+                    })?;
+                    return Ok(EditorOpenOutcome {
+                        status: EditorOperationStatus::Launched,
+                        window,
+                        owned: true,
+                        process_identity: Some(process.identity.clone()),
+                    });
+                }
+                if new_windows.len() > 1 {
+                    return Err(ZedError::AmbiguousProject {
+                        project: project.display().to_string(),
+                        matches: new_windows.len(),
+                    }
+                    .into_workstate());
+                }
                 tokio::time::sleep(self.poll_interval).await;
             }
         };

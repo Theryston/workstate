@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, path::PathBuf};
 use crossterm::event::KeyCode;
 
 use crate::{
-    application::ports::{ConfigStore, FileSystem},
+    application::ports::{ConfigStore, DesktopWorkspaceSnapshot, FileSystem},
     domain::{
         ActionId, ActionKind, ActionSpec, CommandSpec, ComposeSpec, ContainerSpec, EmulatorSpec,
         EnvironmentConfig, ExecutionMode, ReadinessCheck, TilingPreference, WorkspaceId,
@@ -147,6 +147,10 @@ pub enum SaveOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorState {
     pub configuration: EnvironmentConfig,
+    pub live_workspaces: Vec<DesktopWorkspaceSnapshot>,
+    pub selected_live_workspace: Option<usize>,
+    pub workspace_picker_open: bool,
+    pub workspace_observation_error: Option<String>,
     pub mode: EditorMode,
     pub panel: EditorPanel,
     pub selected_action: Option<usize>,
@@ -166,6 +170,10 @@ impl EditorState {
         let selected_workspace = (!configuration.workspaces.is_empty()).then_some(0);
         Self {
             configuration,
+            live_workspaces: Vec::new(),
+            selected_live_workspace: None,
+            workspace_picker_open: false,
+            workspace_observation_error: None,
             mode,
             panel: EditorPanel::Actions,
             selected_action,
@@ -178,6 +186,23 @@ impl EditorState {
             notice: None,
             dirty: false,
         }
+    }
+
+    pub fn with_live_workspaces(mut self, mut workspaces: Vec<DesktopWorkspaceSnapshot>) -> Self {
+        workspaces.sort_by(|left, right| {
+            left.position
+                .unwrap_or(u32::MAX)
+                .cmp(&right.position.unwrap_or(u32::MAX))
+                .then_with(|| left.identity.cmp(&right.identity))
+        });
+        self.selected_live_workspace = (!workspaces.is_empty()).then_some(0);
+        self.live_workspaces = workspaces;
+        self
+    }
+
+    pub fn with_workspace_observation_error(mut self, error: impl Into<String>) -> Self {
+        self.workspace_observation_error = Some(error.into());
+        self
     }
 
     pub fn action_palette(&self) -> Vec<ActionPaletteEntry> {
@@ -768,6 +793,9 @@ impl EditorState {
     }
 
     pub fn handle_key(&mut self, key: KeyCode) -> EditorAction {
+        if self.workspace_picker_open {
+            return self.handle_workspace_picker_key(key);
+        }
         if self.input.is_some() {
             return self.handle_input_key(key);
         }
@@ -816,6 +844,10 @@ impl EditorState {
                         .map(|_| ())
                 });
                 self.record_error(result);
+                EditorAction::None
+            }
+            KeyCode::Enter | KeyCode::Char('l') if self.panel == EditorPanel::Workspaces => {
+                self.open_workspace_picker();
                 EditorAction::None
             }
             KeyCode::Char('t') if self.panel == EditorPanel::Workspaces => {
@@ -1291,7 +1323,12 @@ impl EditorState {
     }
 
     fn next_workspace_id(&self) -> Result<WorkspaceId> {
-        let mut candidate = "workspace".to_owned();
+        self.next_workspace_id_from("workspace")
+    }
+
+    fn next_workspace_id_from(&self, base: &str) -> Result<WorkspaceId> {
+        let base = if base.is_empty() { "workspace" } else { base };
+        let mut candidate = base.to_owned();
         let mut counter = 2usize;
         while self
             .configuration
@@ -1308,6 +1345,102 @@ impl EditorState {
             })?;
         }
         WorkspaceId::new(candidate).map_err(WorkstateError::from)
+    }
+
+    fn open_workspace_picker(&mut self) {
+        if self.live_workspaces.is_empty() {
+            self.validation_errors.push(
+                "No live desktop workspaces are available to link from the current session."
+                    .to_owned(),
+            );
+            return;
+        }
+        self.workspace_picker_open = true;
+        if self.selected_live_workspace.is_none() {
+            self.selected_live_workspace = Some(0);
+        }
+    }
+
+    fn handle_workspace_picker_key(&mut self, key: KeyCode) -> EditorAction {
+        match key {
+            KeyCode::Up => {
+                self.selected_live_workspace =
+                    move_index(self.selected_live_workspace, self.live_workspaces.len(), -1);
+            }
+            KeyCode::Down => {
+                self.selected_live_workspace =
+                    move_index(self.selected_live_workspace, self.live_workspaces.len(), 1);
+            }
+            KeyCode::Enter => {
+                let result = self.link_selected_live_workspace();
+                match result {
+                    Ok(()) => self.workspace_picker_open = false,
+                    Err(error) => self.validation_errors.push(error.to_string()),
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.workspace_picker_open = false,
+            _ => {}
+        }
+        EditorAction::None
+    }
+
+    fn link_selected_live_workspace(&mut self) -> Result<()> {
+        let index = self.selected_live_workspace.ok_or_else(|| {
+            WorkstateError::new(ErrorCategory::Ui, "no live desktop workspace is selected")
+        })?;
+        let workspace = self.live_workspaces.get(index).cloned().ok_or_else(|| {
+            WorkstateError::new(
+                ErrorCategory::Ui,
+                "the selected live workspace does not exist",
+            )
+        })?;
+        if self.configuration.workspaces.iter().any(|configured| {
+            matches!(
+                &configured.target,
+                WorkspaceTarget::Existing {
+                    reference: crate::domain::WorkspaceReference::Identifier(identity)
+                } if identity == &workspace.identity
+            )
+        }) {
+            return Err(WorkstateError::new(
+                ErrorCategory::Ui,
+                format!(
+                    "desktop workspace '{}' is already linked to this environment",
+                    workspace.identity
+                ),
+            ));
+        }
+        let id_base = workspace
+            .name
+            .as_deref()
+            .unwrap_or(workspace.identity.as_str())
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() {
+                    character.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>();
+        let id_base = id_base.trim_matches('-');
+        let workspace_id = self.next_workspace_id_from(id_base)?;
+        let mut specification = WorkspaceSpec::new(
+            workspace_id.as_str(),
+            WorkspaceTarget::Existing {
+                reference: crate::domain::WorkspaceReference::Identifier(
+                    workspace.identity.clone(),
+                ),
+            },
+        )
+        .map_err(WorkstateError::from)?;
+        specification.name = workspace.name;
+        self.configuration
+            .add_workspace(specification)
+            .map_err(WorkstateError::from)?;
+        self.selected_workspace = self.configuration.workspaces.len().checked_sub(1);
+        self.mark_dirty();
+        Ok(())
     }
 
     fn record_error(&mut self, result: Result<()>) {
@@ -1338,6 +1471,7 @@ mod tests {
     use crossterm::event::KeyCode;
 
     use crate::{
+        application::ports::DesktopWorkspaceSnapshot,
         domain::{ActionKind, EnvironmentConfig, ExecutionMode, TilingPreference, WorkspaceTarget},
         infrastructure::filesystem::local::LocalFileSystem,
     };
@@ -1531,6 +1665,40 @@ mod tests {
                 .selected_workspace_spec()
                 .map(|workspace| workspace.tiling),
             Some(TilingPreference::Enabled)
+        );
+    }
+
+    #[test]
+    fn live_workspaces_can_be_linked_without_persisting_the_catalog() {
+        let Some(configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let workspace = DesktopWorkspaceSnapshot {
+            identity: "cosmic-2".to_owned(),
+            name: Some("Code".to_owned()),
+            position: Some(1),
+            focused: false,
+            tiling_enabled: Some(true),
+        };
+        let mut editor = EditorState::new(configuration, EditorMode::Create)
+            .with_live_workspaces(vec![workspace]);
+        editor.panel = EditorPanel::Workspaces;
+
+        assert_eq!(editor.configuration.workspaces.len(), 0);
+        assert_eq!(editor.handle_key(KeyCode::Enter), super::EditorAction::None);
+        assert!(editor.workspace_picker_open);
+        assert_eq!(editor.handle_key(KeyCode::Enter), super::EditorAction::None);
+        assert!(!editor.workspace_picker_open);
+        assert_eq!(editor.configuration.workspaces.len(), 1);
+        assert_eq!(
+            editor.configuration.workspaces[0].target,
+            WorkspaceTarget::Existing {
+                reference: crate::domain::WorkspaceReference::Identifier("cosmic-2".to_owned())
+            }
+        );
+        assert_eq!(
+            editor.configuration.workspaces[0].name.as_deref(),
+            Some("Code")
         );
     }
 }

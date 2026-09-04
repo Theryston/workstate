@@ -227,6 +227,15 @@ pub trait ActionHandler: Send + Sync {
         cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<ActionObservation>>;
 
+    fn observe_for_cleanup<'a>(
+        &'a self,
+        action: &'a ActionSpec,
+        _resources: &'a [ResourceRecord],
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<ActionObservation>> {
+        self.observe(action, cancellation)
+    }
+
     fn apply<'a>(
         &'a self,
         action: &'a ActionSpec,

@@ -111,6 +111,34 @@ impl ZedProjectHandler {
         }
     }
 
+    async fn observe_for_cleanup_inner(
+        &self,
+        resources: &[ResourceRecord],
+        cancellation: CancellationToken,
+    ) -> Result<ActionObservation> {
+        cancellation.check()?;
+        let snapshot = self.desktop.snapshot().await?;
+        let mut observed = Vec::new();
+        for resource in resources {
+            if resource.resource.kind != ResourceKind::DesktopWindow {
+                continue;
+            }
+            let Some(window) = snapshot.window(&resource.resource.stable_identity) else {
+                continue;
+            };
+            if let Some(application) = window.application.as_deref()
+                && !is_zed_application(application)
+            {
+                return Ok(ActionObservation::unknown(format!(
+                    "persisted Zed window '{}' now identifies application '{}'",
+                    resource.resource.stable_identity, application
+                )));
+            }
+            observed.push(resource.clone());
+        }
+        Ok(ActionObservation::already_correct().with_resources(observed))
+    }
+
     async fn apply_inner(
         &self,
         action: &ActionSpec,
@@ -324,6 +352,7 @@ impl ZedProjectHandler {
 
     async fn stop_inner(
         &self,
+        action: &ActionSpec,
         resources: &[ResourceRecord],
         cancellation: CancellationToken,
     ) -> Result<CompensationResult> {
@@ -342,6 +371,13 @@ impl ZedProjectHandler {
             self.editor
                 .close_window(&resource.resource.stable_identity)
                 .await?;
+            wait_for_window_absence(
+                self.desktop.as_ref(),
+                &resource.resource.stable_identity,
+                cancellation.clone(),
+                action_timeout(action),
+            )
+            .await?;
             outputs.push(ActionOutput::log(format!(
                 "closed owned Zed window '{}'",
                 resource.resource.stable_identity
@@ -393,6 +429,18 @@ impl ActionHandler for ZedProjectHandler {
         Box::pin(async move { self.observe_inner(action, cancellation).await })
     }
 
+    fn observe_for_cleanup<'a>(
+        &'a self,
+        _action: &'a ActionSpec,
+        resources: &'a [ResourceRecord],
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<ActionObservation>> {
+        Box::pin(async move {
+            self.observe_for_cleanup_inner(resources, cancellation)
+                .await
+        })
+    }
+
     fn apply<'a>(
         &'a self,
         action: &'a ActionSpec,
@@ -412,11 +460,11 @@ impl ActionHandler for ZedProjectHandler {
 
     fn stop<'a>(
         &'a self,
-        _action: &'a ActionSpec,
+        action: &'a ActionSpec,
         resources: &'a [ResourceRecord],
         cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<CompensationResult>> {
-        Box::pin(async move { self.stop_inner(resources, cancellation).await })
+        Box::pin(async move { self.stop_inner(action, resources, cancellation).await })
     }
 }
 
@@ -550,6 +598,37 @@ async fn move_window_with_retry(
         ErrorCategory::Integration,
         "the Zed window could not be moved after a safe retry",
     ))
+}
+
+async fn wait_for_window_absence(
+    desktop: &dyn DesktopBackend,
+    window_identity: &str,
+    cancellation: CancellationToken,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        cancellation.check()?;
+        if desktop.snapshot().await?.window(window_identity).is_none() {
+            return Ok(());
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(ZedError::WindowCloseTimeout {
+                window: window_identity.to_owned(),
+            }
+            .into_workstate());
+        }
+        tokio::select! {
+            _ = cancellation.cancelled() => {
+                return Err(WorkstateError::new(
+                    ErrorCategory::Runtime,
+                    "operation was cancelled while verifying the Zed window close",
+                ));
+            }
+            _ = tokio::time::sleep(remaining.min(Duration::from_millis(25))) => {}
+        }
+    }
 }
 
 fn window_record(
