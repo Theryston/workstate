@@ -98,6 +98,10 @@ impl WorkstateError {
         }
 
         let mut rendered = self.to_string();
+        if let Some(command) = self.context.get("suggested_command") {
+            rendered.push_str("\n\nCreate it with:\n  ");
+            rendered.push_str(command);
+        }
         let preferred_keys = [
             "operating_system",
             "distribution",
@@ -113,7 +117,7 @@ impl WorkstateError {
                 self.context
                     .keys()
                     .map(String::as_str)
-                    .filter(|key| !preferred_keys.contains(key)),
+                    .filter(|key| *key != "suggested_command" && !preferred_keys.contains(key)),
             )
         {
             let Some(value) = self.context.get(key) else {
@@ -177,14 +181,13 @@ impl WorkstateError {
 
 fn humanize_context_key(key: &str) -> String {
     let mut result = String::with_capacity(key.len());
-    let mut uppercase_next = true;
+    let mut uppercase_first = true;
     for character in key.chars() {
         if character == '_' {
             result.push(' ');
-            uppercase_next = true;
-        } else if uppercase_next {
+        } else if uppercase_first {
             result.extend(character.to_uppercase());
-            uppercase_next = false;
+            uppercase_first = false;
         } else {
             result.push(character);
         }

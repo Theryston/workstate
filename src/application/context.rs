@@ -104,6 +104,16 @@ impl AppContext {
         Self::new(AppDependencies::with_noop_dependencies())
     }
 
+    pub fn with_config_root(mut self, root: PathBuf) -> Result<Self> {
+        let paths = WorkstatePaths::from_root(root)?;
+        self.config_store = Arc::new(TomlConfigStore::new(
+            Arc::clone(&self.file_system),
+            paths.clone(),
+        ));
+        self.state_store = Arc::new(TomlStateStore::new(Arc::clone(&self.file_system), paths));
+        Ok(self)
+    }
+
     pub fn bootstrap() -> Result<Self> {
         initialize_tracing()?;
         let file_system: Arc<dyn FileSystem> = Arc::new(LocalFileSystem);

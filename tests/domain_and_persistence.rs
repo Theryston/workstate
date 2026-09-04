@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crossterm::event::KeyCode;
 use tempfile::tempdir;
 use workstate::{
     application::ports::{ConfigStore, FileSystem, StateStore},
@@ -15,6 +16,7 @@ use workstate::{
             TomlConfigStore, TomlStateStore, WorkstatePaths, atomic_write::atomic_replace,
         },
     },
+    ui::{EditorAction, EditorMode, EditorState},
 };
 
 fn sample_configuration() -> Option<EnvironmentConfig> {
@@ -297,7 +299,15 @@ fn canceled_edits_do_not_change_the_original_configuration_bytes() {
 
     let loaded = store.load(&configuration.slug);
     assert!(loaded.is_ok());
-    drop(loaded);
+    let Some(loaded) = loaded.ok().flatten() else {
+        return;
+    };
+    let mut editor = EditorState::new(loaded, EditorMode::Edit);
+    assert!(editor.configuration.rename("Changed Blog").is_ok());
+    assert_eq!(
+        editor.handle_key(KeyCode::Esc),
+        EditorAction::CancelRequested
+    );
 
     let after = file_system.read(environment_paths.configuration());
     assert_eq!(after.ok(), Some(before));

@@ -463,6 +463,8 @@ pub struct ActionSpec {
     pub id: ActionId,
     pub kind: ActionKind,
     #[serde(default)]
+    pub display_label: Option<String>,
+    #[serde(default)]
     pub depends_on: Vec<ActionId>,
     #[serde(default)]
     pub working_directory: Option<String>,
@@ -487,6 +489,7 @@ impl ActionSpec {
         Ok(Self {
             id: ActionId::new(id)?,
             kind,
+            display_label: None,
             depends_on: Vec::new(),
             working_directory: None,
             desktop_workspace: None,
@@ -510,6 +513,17 @@ impl ActionSpec {
             return Err(DomainError::InvalidActionParameter {
                 action_id: action_id.to_string(),
                 parameter: "working_directory".to_owned(),
+            });
+        }
+
+        if self
+            .display_label
+            .as_ref()
+            .is_some_and(|label| label.is_empty() || label.chars().any(char::is_control))
+        {
+            return Err(DomainError::InvalidActionParameter {
+                action_id: action_id.to_string(),
+                parameter: "display_label".to_owned(),
             });
         }
 

@@ -31,6 +31,14 @@ impl WorkstatePaths {
         })
     }
 
+    pub fn from_root(root: PathBuf) -> Result<Self> {
+        if !root.is_absolute() {
+            return Err(path_error("the Workstate data directory must be absolute"));
+        }
+
+        Ok(Self { root })
+    }
+
     pub fn from_file_system(file_system: &dyn FileSystem) -> Result<Self> {
         Self::new(file_system.home_directory()?)
     }
@@ -100,4 +108,25 @@ fn ensure_environment_child(root: &Path, candidate: &Path) -> Result<()> {
 
 fn path_error(message: impl Into<String>) -> WorkstateError {
     WorkstateError::new(ErrorCategory::Persistence, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::WorkstatePaths;
+
+    #[test]
+    fn custom_root_is_used_without_adding_another_workstate_suffix() {
+        let Some(paths) = WorkstatePaths::from_root(PathBuf::from("/tmp/custom-workstate")).ok()
+        else {
+            return;
+        };
+        assert_eq!(paths.root(), PathBuf::from("/tmp/custom-workstate"));
+    }
+
+    #[test]
+    fn relative_custom_roots_are_rejected() {
+        assert!(WorkstatePaths::from_root(PathBuf::from("custom-workstate")).is_err());
+    }
 }
