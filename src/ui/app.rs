@@ -11,7 +11,7 @@ use crate::{
 use super::{
     editor::{EditorAction, EditorState},
     event::{CrosstermEventSource, EventSource, UiEvent, run_with_terminal},
-    progress::{ProgressEvent, ProgressState},
+    progress::{ProgressEvent, ProgressOperation, ProgressState},
     state::{SelectorAction, SelectorState},
     theme::Theme,
     widgets,
@@ -80,6 +80,18 @@ pub fn show_progress<S>(
 where
     S: ProgressEventSource,
 {
+    show_lifecycle_progress(configuration, source, ProgressOperation::Run, no_color)
+}
+
+pub fn show_lifecycle_progress<S>(
+    configuration: &EnvironmentConfig,
+    source: &mut S,
+    operation: ProgressOperation,
+    no_color: bool,
+) -> Result<ProgressState>
+where
+    S: ProgressEventSource,
+{
     let mut session = super::event::CrosstermTerminalSession;
     run_with_terminal(&mut session, || {
         let backend = CrosstermBackend::new(io::stdout());
@@ -88,7 +100,7 @@ where
         run_progress_loop(
             &mut terminal,
             source,
-            ProgressState::from_configuration(configuration),
+            ProgressState::for_operation(configuration, operation),
             no_color,
         )
     })
@@ -219,14 +231,14 @@ where
     loop {
         terminal
             .draw(|frame| widgets::render_progress(frame, &state, theme))
-            .map_err(|source| ui_error("could not draw setup progress", source))?;
+            .map_err(|source| ui_error("could not draw lifecycle progress", source))?;
         if state.finished {
             return Ok(state);
         }
         let Some(event) = source.next()? else {
             return Err(WorkstateError::new(
                 ErrorCategory::Ui,
-                "setup progress ended before a completion event",
+                "lifecycle progress ended before a completion event",
             ));
         };
         state.apply(event)?;

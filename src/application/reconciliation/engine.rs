@@ -267,11 +267,32 @@ impl<'a> LifecycleEngine<'a> {
                 summary.failure(format!("action '{action_id}' was not found while stopping"));
                 continue;
             };
+            events
+                .emit(ApplicationEvent::ActionStarted {
+                    action_id: action_id.clone(),
+                    attempt: 1,
+                    execution_mode: action.execution_mode,
+                })
+                .await?;
             let Some(handler) = self.handlers.handler_for(&action.kind) else {
                 if !resources.is_empty() || journal.has_pending_mutations(action_id)? {
-                    summary.failure(format!(
+                    let error = format!(
                         "no handler is registered for action '{action_id}', so owned resources were preserved"
-                    ));
+                    );
+                    summary.failure(error.clone());
+                    events
+                        .emit(ApplicationEvent::ActionFailed {
+                            action_id: action_id.clone(),
+                            error,
+                        })
+                        .await?;
+                } else {
+                    events
+                        .emit(ApplicationEvent::ActionReady {
+                            action_id: action_id.clone(),
+                            already_correct: true,
+                        })
+                        .await?;
                 }
                 mutations_by_action.remove(action_id);
                 continue;
@@ -289,16 +310,29 @@ impl<'a> LifecycleEngine<'a> {
             let observed = match current_resources {
                 Ok(observation) => observation,
                 Err(error) => {
-                    summary.failure(format!(
-                        "action '{action_id}' could not be re-observed: {error}"
-                    ));
+                    let error_message =
+                        format!("action '{action_id}' could not be re-observed: {error}");
+                    summary.failure(error_message.clone());
+                    events
+                        .emit(ApplicationEvent::ActionFailed {
+                            action_id: action_id.clone(),
+                            error: error_message,
+                        })
+                        .await?;
                     continue;
                 }
             };
             if observed.status == ObservationStatus::Unknown {
-                summary.failure(format!(
+                let error_message = format!(
                     "action '{action_id}' returned an ambiguous observation; its resources were preserved"
-                ));
+                );
+                summary.failure(error_message.clone());
+                events
+                    .emit(ApplicationEvent::ActionFailed {
+                        action_id: action_id.clone(),
+                        error: error_message,
+                    })
+                    .await?;
                 continue;
             }
 
@@ -308,6 +342,7 @@ impl<'a> LifecycleEngine<'a> {
                 .map(|record| record.resource.clone())
                 .collect::<BTreeSet<_>>();
             let mut stoppable = Vec::new();
+            let mut action_error = None;
             for resource in resources {
                 if !observed_ids.contains(&resource.resource) {
                     journal.mark_resource_cleaned(&resource.resource)?;
@@ -336,10 +371,14 @@ impl<'a> LifecycleEngine<'a> {
                 if decision.is_safe_preservation() {
                     journal.release_resource(&current.resource)?;
                 } else {
-                    summary.failure(format!(
+                    let error_message = format!(
                         "resource '{}' ownership was ambiguous and it was preserved",
                         current.resource
-                    ));
+                    );
+                    summary.failure(error_message.clone());
+                    if action_error.is_none() {
+                        action_error = Some(error_message);
+                    }
                 }
             }
 
@@ -364,9 +403,12 @@ impl<'a> LifecycleEngine<'a> {
                         }
                     }
                     Err(error) => {
-                        summary.failure(format!(
-                            "action '{action_id}' resource cleanup failed: {error}"
-                        ));
+                        let error_message =
+                            format!("action '{action_id}' resource cleanup failed: {error}");
+                        summary.failure(error_message.clone());
+                        if action_error.is_none() {
+                            action_error = Some(error_message);
+                        }
                     }
                 }
             }
@@ -387,10 +429,31 @@ impl<'a> LifecycleEngine<'a> {
                 .await;
                 match result {
                     Ok(_) => journal.mark_compensated(action_id, &mutations)?,
-                    Err(error) => summary.failure(format!(
-                        "action '{action_id}' configuration restoration failed: {error}"
-                    )),
+                    Err(error) => {
+                        let error_message = format!(
+                            "action '{action_id}' configuration restoration failed: {error}"
+                        );
+                        summary.failure(error_message.clone());
+                        if action_error.is_none() {
+                            action_error = Some(error_message);
+                        }
+                    }
                 }
+            }
+            if let Some(error) = action_error {
+                events
+                    .emit(ApplicationEvent::ActionFailed {
+                        action_id: action_id.clone(),
+                        error,
+                    })
+                    .await?;
+            } else {
+                events
+                    .emit(ApplicationEvent::ActionReady {
+                        action_id: action_id.clone(),
+                        already_correct: false,
+                    })
+                    .await?;
             }
         }
 

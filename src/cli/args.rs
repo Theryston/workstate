@@ -42,6 +42,16 @@ pub struct GlobalOptions {
 
 #[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
 pub enum CliSubcommand {
+    #[command(hide = true)]
+    Run {
+        #[arg(value_name = "ENVIRONMENT")]
+        environment: Option<EnvironmentArgument>,
+    },
+    #[command(hide = true)]
+    Start {
+        #[arg(value_name = "ENVIRONMENT")]
+        environment: Option<EnvironmentArgument>,
+    },
     #[command(about = "Create a new environment")]
     New {
         #[arg(value_name = "ENVIRONMENT")]
@@ -149,6 +159,10 @@ mod tests {
     #[test]
     fn parses_each_public_subcommand_and_positional_start() {
         assert!(Cli::try_parse_from(["workstate", "my-app"]).is_ok());
+        assert!(Cli::try_parse_from(["workstate", "run"]).is_ok());
+        assert!(Cli::try_parse_from(["workstate", "run", "my-app"]).is_ok());
+        assert!(Cli::try_parse_from(["workstate", "start"]).is_ok());
+        assert!(Cli::try_parse_from(["workstate", "start", "my-app"]).is_ok());
         assert!(Cli::try_parse_from(["workstate", "new", "my-app"]).is_ok());
         assert!(Cli::try_parse_from(["workstate", "new"]).is_ok());
         assert!(Cli::try_parse_from(["workstate", "edit", "my-app"]).is_ok());
@@ -158,6 +172,18 @@ mod tests {
         assert!(Cli::try_parse_from(["workstate", "delete", "my-app"]).is_ok());
         assert!(Cli::try_parse_from(["workstate", "delete"]).is_ok());
         assert!(Cli::try_parse_from(["workstate", "--yes", "edit", "my-app"]).is_ok());
+    }
+
+    #[test]
+    fn hidden_run_aliases_are_not_listed_in_root_help() {
+        let help = <Cli as clap::CommandFactory>::command()
+            .render_help()
+            .to_string();
+        assert!(!help.contains("{run,start}"));
+        assert!(!help.lines().any(|line| {
+            let command = line.trim_start();
+            command.starts_with("run ") || command.starts_with("start ")
+        }));
     }
 
     #[test]

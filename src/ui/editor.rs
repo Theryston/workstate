@@ -443,12 +443,21 @@ impl EditorState {
                     action
                         .depends_on
                         .iter()
-                        .map(ToString::to_string)
+                        .map(|dependency| self.action_label_for_id(dependency))
                         .collect::<Vec<_>>()
                         .join(", ")
                 }
             }
         }
+    }
+
+    pub fn action_label_for_id(&self, action_id: &ActionId) -> String {
+        self.configuration
+            .actions
+            .iter()
+            .find(|action| &action.id == action_id)
+            .map(action_label)
+            .unwrap_or_else(|| action_id.to_string())
     }
 
     pub fn add_action_from_palette(&mut self, palette_index: usize) -> Result<ActionId> {
@@ -2110,7 +2119,9 @@ mod tests {
         infrastructure::filesystem::local::LocalFileSystem,
     };
 
-    use super::{EditorMode, EditorPanel, EditorState, SaveOutcome, action_palette};
+    use super::{
+        EditorMode, EditorPanel, EditorState, InspectorField, SaveOutcome, action_palette,
+    };
 
     #[test]
     fn palette_contains_the_capability_oriented_mvp_actions() {
@@ -2347,6 +2358,36 @@ mod tests {
         );
         assert_eq!(editor.handle_key(KeyCode::Esc), super::EditorAction::None);
         assert_eq!(editor.panel, EditorPanel::Actions);
+    }
+
+    #[test]
+    fn dependency_values_use_action_names_instead_of_identifiers() {
+        let Some(mut configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let Some(mut api) = ActionSpec::new("api", ActionKind::RunCommand).ok() else {
+            return;
+        };
+        let Some(mut mobile) = ActionSpec::new("mobile", ActionKind::RunCommand).ok() else {
+            return;
+        };
+        api.display_label = Some("Open API".to_owned());
+        mobile.display_label = Some("Open Mobile API".to_owned());
+        let api_id = api.id.clone();
+        mobile.depends_on.push(api_id.clone());
+        assert!(configuration.add_action(api).is_ok());
+        assert!(configuration.add_action(mobile).is_ok());
+
+        let mut editor = EditorState::new(configuration, EditorMode::Create);
+        editor.selected_action = Some(1);
+        assert_eq!(
+            editor.inspector_field_value(InspectorField::Dependencies),
+            "Open API"
+        );
+        assert_ne!(
+            editor.inspector_field_value(InspectorField::Dependencies),
+            api_id.to_string()
+        );
     }
 
     #[test]

@@ -58,13 +58,15 @@ The top-level parser must support:
 ~~~
 workstate
 workstate <environment>
+workstate run [environment]
+workstate start [environment]
 workstate new [environment]
 workstate edit [environment]
 workstate stop [environment]
 workstate delete [environment]
 ~~~
 
-Reserve known subcommand names so a name such as new is not interpreted as an environment. Preserve the positional environment invocation as the primary start operation. Do not add a public start command in this task.
+Reserve known subcommand names so a name such as new is not interpreted as an environment. Preserve the positional environment invocation as the primary start operation. Accept `run` and `start` as hidden aliases that normalize to the positional flow, but do not expose either alias in root help or document them as public subcommands.
 
 When `edit`, `stop`, or `delete` omit the environment argument, resolve it through the shared saved-environment selector. When `new` omits the argument, resolve it through the shared validated text field. Resolve and validate the target before opening the editor or beginning the requested lifecycle operation.
 
@@ -236,7 +238,16 @@ The --yes flag may skip only the confirmation. The UI must still perform compati
 
 ### 11. Implement execution progress rendering
 
-Create a progress view that consumes application events rather than polling integration internals directly.
+Create one reusable lifecycle progress view for both `run` and `stop`. It must consume application events through a bounded channel rather than polling integration internals directly.
+
+Render one row for every configured action before the first action starts, preserving configuration order. Each row must expose the action's display label and a visual state marker:
+
+- a pending marker while it is waiting for dependencies or scheduler capacity;
+- an animated spinner while it is running;
+- a success check when it reaches `ready` during `run` or `stopped` during `stop`;
+- distinct markers for skipped, failed, cancelled, and rolling-back states.
+
+The view must keep updating its elapsed time and spinner on a periodic tick even when external integrations do not emit an event. It must visibly support concurrent branches by allowing more than one action row to be running at once. Use a starting/stopping operation title and an activity panel for action output and ownership-preserving cleanup messages.
 
 Render:
 
@@ -249,9 +260,10 @@ Render:
 - logs;
 - elapsed time;
 - timeouts;
-- final summary.
+- final summary;
+- stop cleanup progress with the same component and event mapping.
 
-The progress view must close only after setup succeeds or rollback finishes.
+The progress view must close only after run setup succeeds, rollback finishes, or stop cleanup completes or fails. `--quiet` and `--json` must bypass interactive progress so their output remains script-safe.
 
 ### 12. Define keyboard behavior
 
@@ -302,6 +314,7 @@ All tests must use fake application services and temporary storage.
 - workstate new [environment] creates only through the shared dynamic editor, using the reusable name field when the argument is omitted.
 - workstate edit [environment] edits only through the same shared dynamic editor, using the reusable environment selector when the argument is omitted.
 - workstate stop [environment] and workstate delete [environment] use the same reusable environment selector when the argument is omitted.
+- workstate <environment> and workstate stop [environment] display the reusable lifecycle progress view with action rows, pending markers, animated running spinners, completion checks, failure states, and live activity.
 - Every project and command can receive an explicit working directory.
 - Every visual action can receive a desktop workspace target.
 - Workspace tiling is configured as a boolean desired state.

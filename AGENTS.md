@@ -195,7 +195,9 @@ The reverse operation used during rollback after a setup failure.
 
 ## 6. Public CLI contract
 
-The MVP intentionally does not require a `start` subcommand. Running an environment by name is the start operation.
+The MVP does not expose a separate public `start` subcommand. Running an environment by name is the start operation.
+
+The parser also accepts `workstate run [environment]` and `workstate start [environment]` as hidden compatibility aliases. Without an environment, either alias must normalize to the same selector flow as `workstate`; with an environment, either alias must normalize to the same lifecycle flow as `workstate <environment>`. They must not create separate execution paths, must not appear in root help output, and must not be documented as public subcommands.
 
 ### 6.1 Direct environment execution
 
@@ -1335,33 +1337,62 @@ The UI must:
 
 ### 18.4 Execution TUI
 
+The `run` and `stop` commands must use the same reusable lifecycle progress view. The view consumes application events through a bounded channel and must not poll integrations directly.
+
+Before the first action starts, render one row for every configured action in configuration order. Each row must expose:
+
+- the user-facing action label;
+- a pending marker while dependencies or scheduling keep it queued;
+- an animated spinner while the action is executing;
+- a success check when the action reaches `ready` or `stopped`;
+- a distinct marker for skipped, failed, cancelled, and rolling-back states;
+- elapsed time and timeout where relevant;
+- the latest useful action detail.
+
 During environment execution, show:
 
 - the environment name;
-- action status (`pending`, `running`, `ready`, `skipped`, `failed`, `rolling back`, `stopped`);
+- action status (`pending`, `running`, `ready`, `skipped`, `failed`, `cancelled`, `rolling back`, `stopped`);
 - dependency progress;
 - meaningful external command output;
 - elapsed time and timeout where relevant;
 - ownership-sensitive cleanup information;
 - a final summary after setup completes.
 
-The TUI must close only after the setup/reconciliation phase completes or rollback finishes. It must not attach the user to tmux or keep the main process alive for background services.
+The view must update from events even when independent actions are running concurrently. A periodic UI tick must advance elapsed time and the spinner while no application event is available. The header must distinguish starting from stopping, and the activity panel must remain useful for action output and ownership-preserving cleanup messages.
+
+The TUI must close only after the run/reconciliation phase completes, rollback finishes, or stop cleanup completes or fails. It must not attach the user to tmux or keep the main process alive for background services. Human interactive progress is not emitted for `--quiet` or `--json`; those modes remain free of spinners and terminal control sequences.
 
 ### 18.5 Final summary
 
-The final summary should be concise and actionable. When relevant, include:
+After the lifecycle TUI closes, human output must end with a compact summary card. The card is intentionally less interactive than the progress view, but it must make the outcome easy to scan and the next command easy to copy. Use the same visual language for `run`, `stop`, and their dry-run variants:
+
+- a bordered card with a clear status title;
+- the environment display name on its own line;
+- short status rows with symbols, counts, and elapsed time when available;
+- background-session and next-command instructions when relevant;
+- no raw implementation identifiers or unnecessary prose.
+
+For a successful run with background work, include the tmux inspection command and the stop command. For a stop, include cleaned and preserved resource counts and show stale-resource information when it is non-zero. Example:
 
 ```text
-Environment: personal-blog
-Status: ready
-Background session: workstate-personal-blog
-
-Inspect background processes with:
-  tmux attach-session -t workstate-personal-blog
-
-Stop with:
-  workstate stop personal-blog
+╭──────────────────────────────────────────────╮
+│ Environment ready                            │
+│ personal-blog                                │
+│                                              │
+│ ✓ 4 actions complete                         │
+│ ↻ 3 actions changed                          │
+│ • 1 action already correct                   │
+│                                              │
+│ Background session                           │
+│   tmux attach-session -t workstate-personal-blog │
+│                                              │
+│ Run again: workstate personal-blog           │
+│ Stop with: workstate stop personal-blog      │
+╰──────────────────────────────────────────────╯
 ```
+
+Human summary cards must remain readable with `--no-color` and must not affect `--json` or `--quiet`. JSON keeps a machine-readable message document without terminal control sequences; quiet mode emits no success summary.
 
 Do not claim success until required actions and checks are complete.
 

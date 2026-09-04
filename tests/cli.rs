@@ -13,6 +13,10 @@ fn public_command_grammar_covers_selection_start_new_edit_stop_and_delete() {
     let cases = [
         (vec!["workstate"], "select"),
         (vec!["workstate", "personal-blog"], "start"),
+        (vec!["workstate", "run"], "select"),
+        (vec!["workstate", "run", "personal-blog"], "start"),
+        (vec!["workstate", "start"], "select"),
+        (vec!["workstate", "start", "personal-blog"], "start"),
         (vec!["workstate", "new", "personal-blog"], "new"),
         (vec!["workstate", "new"], "new"),
         (vec!["workstate", "edit", "personal-blog"], "edit"),

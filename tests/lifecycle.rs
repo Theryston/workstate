@@ -463,11 +463,24 @@ async fn stop_restores_the_exact_recorded_configuration_value() -> TestResult {
         .started
         .insert("first".to_owned());
     let engine = lifecycle_engine(&configurations, &states, &handler_state, false, 1)?;
-    let events: Arc<dyn EventSink> = Arc::new(InMemoryEventSink::default());
+    let events = Arc::new(InMemoryEventSink::default());
 
     engine
-        .stop(&configuration, CancellationToken::new(), events)
+        .stop(&configuration, CancellationToken::new(), events.clone())
         .await?;
+
+    let snapshot = events.snapshot()?;
+    assert!(snapshot.iter().any(|event| matches!(
+        event,
+        workstate::application::reconciliation::ApplicationEvent::ActionStarted {
+            action_id, ..
+        } if action_id.as_str() == "first"
+    )));
+    assert!(snapshot.iter().any(|event| matches!(
+        event,
+        workstate::application::reconciliation::ApplicationEvent::ActionReady { action_id, .. }
+            if action_id.as_str() == "first"
+    )));
 
     let state = handler_state
         .lock()

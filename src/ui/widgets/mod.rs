@@ -10,7 +10,7 @@ use crate::domain::{ActionKind, ActionSpec, EnvironmentName};
 
 use super::{
     editor::{EditorPanel, EditorState, InspectorChoice, InspectorPicker, action_palette},
-    progress::{ActionProgressStatus, ProgressState},
+    progress::{ActionProgressStatus, ProgressOperation, ProgressState},
     state::{EnvironmentStatus, SELECTOR_EMPTY_MESSAGE, SelectorState},
     theme::Theme,
 };
@@ -106,7 +106,7 @@ pub fn render_editor(frame: &mut Frame<'_>, state: &EditorState, theme: Theme) {
         );
     }
     if let Some(picker) = &state.inspector_picker {
-        render_inspector_picker(frame, picker, theme);
+        render_inspector_picker(frame, state, picker, theme);
     }
     if state.workspace_picker_open {
         render_live_workspace_picker(frame, state, theme);
@@ -122,15 +122,25 @@ pub fn render_progress(frame: &mut Frame<'_>, state: &ProgressState, theme: Them
             Constraint::Length(2),
         ])
         .split(frame.area());
-    let summary = format!(
-        " {}  ·  {} / {} ready  ·  {} ms",
-        state.environment_name,
-        state.ready_count(),
-        state.total_count(),
-        state.elapsed.as_millis()
-    );
+    let summary = if state.total_count() == 0 {
+        format!(
+            " {}  ·  no actions configured  ·  {} ms",
+            state.environment_name,
+            state.elapsed.as_millis()
+        )
+    } else {
+        format!(
+            " {}  ·  {} / {} complete  ·  {} running  ·  {} pending  ·  {} ms",
+            state.environment_name,
+            state.ready_count(),
+            state.total_count(),
+            state.running_count(),
+            state.pending_count(),
+            state.elapsed.as_millis()
+        )
+    };
     frame.render_widget(
-        Paragraph::new(summary).block(panel_block("Starting environment", theme)),
+        Paragraph::new(summary).block(panel_block(state.operation.title(), theme)),
         sections[0],
     );
 
@@ -154,10 +164,14 @@ pub fn render_progress(frame: &mut Frame<'_>, state: &ProgressState, theme: Them
                 .unwrap_or_else(|| format!("  {} ms", entry.elapsed.as_millis()));
             ListItem::new(Line::from(vec![
                 Span::styled(
-                    format!("{}  ", entry.status),
+                    format!("{}  ", progress_marker(entry.status, state.spinner())),
                     progress_status_style(entry.status, theme),
                 ),
                 Span::styled(entry.label.clone(), theme.text_style()),
+                Span::styled(
+                    format!("  {}", entry.status),
+                    progress_status_style(entry.status, theme),
+                ),
                 Span::styled(timing, theme.muted_style()),
                 Span::styled(detail, theme.muted_style()),
             ]))
@@ -182,14 +196,16 @@ pub fn render_progress(frame: &mut Frame<'_>, state: &ProgressState, theme: Them
     frame.render_widget(
         List::new(logs)
             .style(theme.muted_style())
-            .block(panel_block("Logs", theme)),
+            .block(panel_block("Activity", theme)),
         columns[1],
     );
 
-    let footer = match state.successful {
-        Some(true) => "Environment ready · press q to close",
-        Some(false) => "Setup failed and rollback finished · press q to close",
-        None => "Starting · progress is streamed from the application layer",
+    let footer = match (state.operation, state.successful) {
+        (ProgressOperation::Run, Some(true)) => "Environment ready · closing",
+        (ProgressOperation::Run, Some(false)) => "Run failed · rollback finished · closing",
+        (ProgressOperation::Stop, Some(true)) => "Environment stopped · closing",
+        (ProgressOperation::Stop, Some(false)) => "Stop failed · closing",
+        (_, None) => "Live lifecycle updates · the interface closes when the operation finishes",
     };
     frame.render_widget(
         Paragraph::new(footer).style(theme.muted_style()),
@@ -615,7 +631,12 @@ fn editor_controls(state: &EditorState) -> Vec<EditorControl> {
     }
 }
 
-fn render_inspector_picker(frame: &mut Frame<'_>, picker: &InspectorPicker, theme: Theme) {
+fn render_inspector_picker(
+    frame: &mut Frame<'_>,
+    state: &EditorState,
+    picker: &InspectorPicker,
+    theme: Theme,
+) {
     match picker {
         InspectorPicker::Choices {
             title,
@@ -651,9 +672,10 @@ fn render_inspector_picker(frame: &mut Frame<'_>, picker: &InspectorPicker, them
                     } else {
                         "[ ] "
                     };
+                    let label = state.action_label_for_id(action_id);
                     ListItem::new(Line::from(vec![
                         Span::styled(marker, theme.muted_style()),
-                        Span::styled(action_id.to_string(), theme.text_style()),
+                        Span::styled(label, theme.text_style()),
                     ]))
                 })
                 .collect::<Vec<_>>();
@@ -778,7 +800,21 @@ fn progress_status_style(status: ActionProgressStatus, theme: Theme) -> Style {
         ActionProgressStatus::Ready | ActionProgressStatus::Stopped => theme.success_style(),
         ActionProgressStatus::Failed => theme.error_style(),
         ActionProgressStatus::Running | ActionProgressStatus::RollingBack => theme.warning_style(),
-        ActionProgressStatus::Pending | ActionProgressStatus::Skipped => theme.muted_style(),
+        ActionProgressStatus::Pending
+        | ActionProgressStatus::Skipped
+        | ActionProgressStatus::Cancelled => theme.muted_style(),
+    }
+}
+
+fn progress_marker(status: ActionProgressStatus, spinner: &str) -> &str {
+    match status {
+        ActionProgressStatus::Pending => "·",
+        ActionProgressStatus::Running => spinner,
+        ActionProgressStatus::Ready | ActionProgressStatus::Stopped => "✓",
+        ActionProgressStatus::Skipped => "↷",
+        ActionProgressStatus::Failed => "✗",
+        ActionProgressStatus::Cancelled => "!",
+        ActionProgressStatus::RollingBack => "↺",
     }
 }
 
@@ -820,6 +856,7 @@ fn centered_rect(width_percent: u16, height_percent: u16, area: Rect) -> Rect {
 mod tests {
     use std::time::Duration;
 
+    use crossterm::event::KeyCode;
     use ratatui::{Terminal, backend::TestBackend};
 
     use crate::domain::{
@@ -1041,6 +1078,49 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(!inspector.contains("Validation"));
+    }
+
+    #[test]
+    fn dependency_picker_renders_action_names_instead_of_action_ids() {
+        let Some(mut configuration) = EnvironmentConfig::new("Personal Blog").ok() else {
+            return;
+        };
+        let Some(mut api) = ActionSpec::new("api", ActionKind::RunCommand).ok() else {
+            return;
+        };
+        let Some(mut mobile) = ActionSpec::new("mobile", ActionKind::RunCommand).ok() else {
+            return;
+        };
+        api.display_label = Some("Open API".to_owned());
+        mobile.display_label = Some("Open Mobile API".to_owned());
+        let api_id = api.id.clone();
+        mobile.depends_on.push(api_id);
+        assert!(configuration.add_action(api).is_ok());
+        assert!(configuration.add_action(mobile).is_ok());
+
+        let mut state = EditorState::new(configuration, EditorMode::Create);
+        state.selected_action = Some(1);
+        state.panel = crate::ui::EditorPanel::Inspector;
+        state.selected_inspector = Some(state.inspector_fields().len().saturating_sub(1));
+        state.handle_key(KeyCode::Enter);
+
+        let backend = TestBackend::new(100, 20);
+        let Ok(mut terminal) = Terminal::new(backend) else {
+            return;
+        };
+        let result = terminal.draw(|frame| render_editor(frame, &state, Theme::new(false)));
+        assert!(result.is_ok());
+        let Some(completed) = result.ok() else {
+            return;
+        };
+        let rendered = completed
+            .buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Open API"));
+        assert!(!rendered.contains("api"));
     }
 
     #[test]

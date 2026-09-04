@@ -64,6 +64,11 @@ impl TryFrom<Cli> for Invocation {
         let command = match (cli.subcommand, cli.environment) {
             (None, None) => Command::Select,
             (None, Some(environment)) => Command::Start { environment },
+            (Some(CliSubcommand::Run { environment }), None)
+            | (Some(CliSubcommand::Start { environment }), None) => match environment {
+                Some(environment) => Command::Start { environment },
+                None => Command::Select,
+            },
             (Some(CliSubcommand::New { environment }), None) => Command::New { environment },
             (Some(CliSubcommand::Edit { environment }), None) => Command::Edit { environment },
             (Some(CliSubcommand::Stop { environment }), None) => Command::Stop { environment },
@@ -107,6 +112,30 @@ mod tests {
             return;
         };
         assert_eq!(invocation.command, Command::Select);
+    }
+
+    #[test]
+    fn hidden_run_aliases_normalize_to_the_base_command() {
+        for arguments in [["workstate", "run"], ["workstate", "start"]] {
+            let invocation = parse_from(arguments);
+            assert!(invocation.is_ok());
+            let Some(invocation) = invocation.ok() else {
+                continue;
+            };
+            assert_eq!(invocation.command, Command::Select);
+        }
+
+        for arguments in [
+            ["workstate", "run", "personal-blog"],
+            ["workstate", "start", "personal-blog"],
+        ] {
+            let invocation = parse_from(arguments);
+            assert!(invocation.is_ok());
+            let Some(invocation) = invocation.ok() else {
+                continue;
+            };
+            assert!(matches!(invocation.command, Command::Start { .. }));
+        }
     }
 
     #[test]
