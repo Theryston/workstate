@@ -131,6 +131,7 @@ The editor must support both creation and editing:
 - render validation errors in the footer instead of the contextual inspector;
 - identify action-related validation errors with the action's current display name;
 - revalidate a displayed invalid field after it changes and remove its error immediately when fixed;
+- show a context-sensitive footer legend for the focused action list, inspector, and modal editors;
 - show a review and save screen.
 
 The user must be able to add actions in any order and attach dependencies after creating them. Do not implement a fixed sequence of technology-specific questions.

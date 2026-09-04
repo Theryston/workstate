@@ -407,7 +407,7 @@ fn render_editor_footer(frame: &mut Frame<'_>, state: &EditorState, theme: Theme
         )));
     }
     lines.push(Line::from(Span::styled(
-        "↑↓ navigate  ← back  → edit  Enter edit  Tab focus  a add  d delete  Esc back/exit  s/Ctrl+S save",
+        editor_controls(state),
         theme.muted_style(),
     )));
 
@@ -417,6 +417,42 @@ fn render_editor_footer(frame: &mut Frame<'_>, state: &EditorState, theme: Theme
             .border_style(theme.border_style()),
     );
     frame.render_widget(footer, area);
+}
+
+fn editor_controls(state: &EditorState) -> &'static str {
+    if state.input.is_some() {
+        return "Type value  Enter apply  Esc cancel";
+    }
+    if state.palette_open {
+        return "↑↓ select action  Enter add  Esc cancel";
+    }
+    if state.delete_confirmation {
+        return "y confirm  n/Esc cancel";
+    }
+    if state.workspace_picker_open {
+        return "↑↓ navigate  Enter select  Esc cancel";
+    }
+    if let Some(picker) = &state.inspector_picker {
+        return match picker {
+            InspectorPicker::Choices { .. } => "↑↓ navigate  Enter select  Esc cancel",
+            InspectorPicker::Dependencies { .. } => {
+                "↑↓ navigate  Space toggle  Enter confirm  Esc cancel"
+            }
+        };
+    }
+
+    match (state.panel, state.selected_action.is_some()) {
+        (EditorPanel::Actions, true) => {
+            "↑↓ select action  →/Enter inspect  Tab inspector  a add  d delete  s/Ctrl+S save  Esc/q exit"
+        }
+        (EditorPanel::Actions, false) => {
+            "↑↓ navigate  Tab inspector  a add  s/Ctrl+S save  Esc/q exit"
+        }
+        (EditorPanel::Inspector, true) => {
+            "↑↓ select field  Enter edit  ←/Esc actions  Tab actions  a add  d delete  s/Ctrl+S save  q exit"
+        }
+        (EditorPanel::Inspector, false) => "Tab actions  a add  s/Ctrl+S save  ←/Esc back  q exit",
+    }
 }
 
 fn render_inspector_picker(frame: &mut Frame<'_>, picker: &InspectorPicker, theme: Theme) {
@@ -632,14 +668,45 @@ mod tests {
     };
 
     use super::{
-        Theme, render_delete_confirmation, render_editor, render_inspector, render_progress,
-        render_selector,
+        Theme, editor_controls, render_delete_confirmation, render_editor, render_inspector,
+        render_progress, render_selector,
     };
     use crate::ui::{
         ActionProgressStatus, EnvironmentListItem, EnvironmentStatus, ProgressEvent, ProgressState,
         SelectorState,
     };
     use crate::ui::{EditorMode, EditorState};
+
+    #[test]
+    fn editor_footer_controls_follow_the_active_panel_and_selection() {
+        let Some(configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let empty_state = EditorState::new(configuration, EditorMode::Create);
+        assert_eq!(
+            editor_controls(&empty_state),
+            "↑↓ navigate  Tab inspector  a add  s/Ctrl+S save  Esc/q exit"
+        );
+
+        let Some(mut configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let Some(action) = ActionSpec::new("run-command", ActionKind::RunCommand).ok() else {
+            return;
+        };
+        assert!(configuration.add_action(action).is_ok());
+        let mut state = EditorState::new(configuration, EditorMode::Create);
+        assert_eq!(
+            editor_controls(&state),
+            "↑↓ select action  →/Enter inspect  Tab inspector  a add  d delete  s/Ctrl+S save  Esc/q exit"
+        );
+
+        state.panel = crate::ui::EditorPanel::Inspector;
+        assert_eq!(
+            editor_controls(&state),
+            "↑↓ select field  Enter edit  ←/Esc actions  Tab actions  a add  d delete  s/Ctrl+S save  q exit"
+        );
+    }
 
     #[test]
     fn selector_empty_state_renders_an_actionable_snapshot() {

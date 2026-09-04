@@ -1256,7 +1256,7 @@ The editor has two primary focus states:
 - `Actions`: `Up` and `Down` move between actions. `Enter` or `Right` enters the inspector for the selected action. `Esc` exits the editor without saving.
 - `Inspector`: `Up` and `Down` move between fields generated for the selected action. `Enter` edits the selected field. `Esc` or `Left` returns to the action list without leaving the editor.
 
-`Tab` may switch between the two panes as an accessibility and efficiency shortcut, but it must not replace the documented `Enter` and `Esc` flow. The footer contains only generic controls that apply to the entire editor, such as navigation, focus changes, adding, deleting, canceling, and saving. It must not grow a list of action-specific hotkeys.
+`Tab` may switch between the two panes as an accessibility and efficiency shortcut, but it must not replace the documented `Enter` and `Esc` flow. The footer always shows a compact, context-sensitive control legend. With the action list focused, it describes action selection, inspector entry, adding, deletion when an action is selected, saving, and exit. With the inspector focused, it describes field selection, field editing, returning to the action list, adding, deletion when an action is selected, saving, and exit. Modal editors replace the legend with their own navigation, confirmation, and cancellation controls. The legend must not grow a list of action-specific hotkeys.
 
 Saving is available through `s` and `Ctrl+S`. Saving still validates the full configuration and requires the normal explicit confirmation before persistence. A failed validation keeps the editor open and displays the error in English. A canceled save or editor exit must preserve the previously persisted configuration byte-for-byte.
 
