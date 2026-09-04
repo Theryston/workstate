@@ -12,10 +12,11 @@ pub mod terminal;
 pub use clock::{Clock, SystemClock};
 pub use containers::ContainerBackend;
 pub use desktop::{
-    DesktopBackend, DesktopEnvironmentDetector, DesktopSnapshot, DesktopWindowSnapshot,
-    DesktopWorkspaceSnapshot,
+    DesktopBackend, DesktopEnvironmentDetector, DesktopOperationOutcome, DesktopOperationStatus,
+    DesktopSnapshot, DesktopWindowSnapshot, DesktopWorkspaceResolution, DesktopWorkspaceSnapshot,
+    ensure_workspace, resolve_workspace_target,
 };
-pub use editor::EditorBackend;
+pub use editor::{EditorBackend, EditorOpenOutcome, EditorOperationStatus, EditorWindowSnapshot};
 pub use emulator::EmulatorBackend;
 pub use filesystem::FileSystem;
 pub use persistence::{ConfigStore, StateStore};

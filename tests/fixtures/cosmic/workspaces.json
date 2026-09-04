@@ -1,0 +1,23 @@
+[
+  {
+    "id": "1",
+    "name": "Main",
+    "coordinates": [0],
+    "active": true,
+    "tiling": "enabled"
+  },
+  {
+    "id": "2",
+    "name": "Code",
+    "coordinates": [1],
+    "active": false,
+    "tiling": "disabled"
+  },
+  {
+    "id": "3",
+    "name": "Empty",
+    "coordinates": [2],
+    "active": false,
+    "tiling": "disabled"
+  }
+]

@@ -25,8 +25,9 @@ use crate::{
     infrastructure::{
         filesystem::local::LocalFileSystem,
         persistence::{TomlConfigStore, TomlStateStore, WorkstatePaths},
+        process::LocalProcessRunner,
     },
-    integrations::IntegrationRegistry,
+    integrations::{CosmicBackend, IntegrationRegistry, ZedBackend},
     platform::{
         DesktopEnvironment, DetectedPlatform, Distribution, OperatingSystem, TerminalCapability,
     },
@@ -146,20 +147,49 @@ impl AppContext {
         let integration_registry =
             IntegrationRegistry::from_platform(&detected_platform, &SystemPlatformProbe)?;
 
-        Ok(Self::new(AppDependencies {
+        let process_runner: Arc<dyn ProcessRunner> = Arc::new(LocalProcessRunner);
+        let supported_desktop = detected_platform.operating_system.is_linux()
+            && detected_platform.distribution.is_pop_os()
+            && detected_platform.desktop_environment.is_cosmic();
+        let (desktop_backend, editor_backend, action_handlers) = if supported_desktop {
+            let cosmic = Arc::new(CosmicBackend::new(Arc::clone(&process_runner)));
+            let desktop: Arc<dyn DesktopBackend> = cosmic;
+            let zed = Arc::new(ZedBackend::new(
+                Arc::clone(&process_runner),
+                Arc::clone(&desktop),
+                Arc::clone(&file_system),
+            ));
+            let mut handlers = ActionHandlerRegistry::new();
+            crate::integrations::cosmic::register_handlers(&mut handlers, Arc::clone(&desktop))?;
+            crate::integrations::zed::register_handlers(
+                &mut handlers,
+                Arc::clone(&zed),
+                Arc::clone(&desktop),
+            )?;
+            (desktop, zed as Arc<dyn EditorBackend>, Arc::new(handlers))
+        } else {
+            (
+                Arc::new(UnavailableBackend::new("desktop backend")) as Arc<dyn DesktopBackend>,
+                Arc::new(UnavailableBackend::new("editor backend")) as Arc<dyn EditorBackend>,
+                Arc::new(ActionHandlerRegistry::new()),
+            )
+        };
+
+        let context = Self::new(AppDependencies {
             config_store,
             state_store,
             file_system,
-            process_runner: Arc::new(UnavailableBackend::new("process runner")),
+            process_runner,
             clock: Arc::new(SystemClock),
             platform_detector: Arc::new(platform_detector),
-            desktop_backend: Arc::new(UnavailableBackend::new("desktop backend")),
+            desktop_backend,
             terminal_backend: Arc::new(UnavailableBackend::new("terminal backend")),
             container_backend: Arc::new(UnavailableBackend::new("container backend")),
-            editor_backend: Arc::new(UnavailableBackend::new("editor backend")),
+            editor_backend,
             emulator_backend: Arc::new(UnavailableBackend::new("emulator backend")),
             integration_registry: Arc::new(integration_registry),
-        }))
+        });
+        Ok(context.with_action_handlers(action_handlers))
     }
 
     pub fn config_store(&self) -> &dyn ConfigStore {
@@ -400,8 +430,9 @@ impl PlatformDetector for UnavailableBackend {
 }
 
 impl DesktopBackend for UnavailableBackend {
-    fn snapshot(&self) -> Result<DesktopSnapshot> {
-        Err(self.error(ErrorCategory::Platform, "desktop observation"))
+    fn snapshot<'a>(&'a self) -> BoxFuture<'a, Result<DesktopSnapshot>> {
+        let error = self.error(ErrorCategory::Platform, "desktop observation");
+        Box::pin(async move { Err(error) })
     }
 }
 

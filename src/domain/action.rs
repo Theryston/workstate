@@ -5,7 +5,7 @@ use std::{
 
 use serde::{Deserialize, Deserializer, Serialize, de::Error as DeserializeError};
 
-use super::{DomainError, WorkspaceId, validate_identifier};
+use super::{DomainError, TilingPreference, WorkspaceId, WorkspaceTarget, validate_identifier};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
@@ -482,6 +482,10 @@ pub struct ActionSpec {
     pub retry_policy: RetryPolicy,
     #[serde(default)]
     pub cleanup_policy: CleanupPolicy,
+    #[serde(skip)]
+    pub resolved_workspace_target: Option<WorkspaceTarget>,
+    #[serde(skip)]
+    pub resolved_tiling: Option<TilingPreference>,
 }
 
 impl ActionSpec {
@@ -499,6 +503,8 @@ impl ActionSpec {
             timeout: None,
             retry_policy: RetryPolicy::default(),
             cleanup_policy: CleanupPolicy::default(),
+            resolved_workspace_target: None,
+            resolved_tiling: None,
         })
     }
 

@@ -1,0 +1,17 @@
+[
+  {
+    "identifier": "zed-window-1",
+    "app_id": "dev.zed.Zed",
+    "title": "Code",
+    "state": ["activated"],
+    "workspaces": ["2"],
+    "project_path": "/home/theryston/code/example"
+  },
+  {
+    "identifier": "terminal-1",
+    "app_id": "com.system76.CosmicTerm",
+    "title": "Shell",
+    "state": [],
+    "workspaces": ["1"]
+  }
+]

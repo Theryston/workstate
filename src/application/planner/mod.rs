@@ -423,7 +423,9 @@ impl<'a> Planner<'a> {
             .map_err(WorkstateError::from)?;
         let mut entries = BTreeMap::new();
 
-        for action in &configuration.actions {
+        for source_action in &configuration.actions {
+            let mut action = source_action.clone();
+            enrich_workspace_context(&mut action, configuration);
             let descriptor = self.integrations.handler_for(&action.kind);
             let handler = self.handlers.handler_for(&action.kind);
             let mut required_capabilities = descriptor
@@ -454,7 +456,7 @@ impl<'a> Planner<'a> {
 
             let (classification, detail) = match handler.as_ref() {
                 None => (PlanClassification::Invalid, Some(unavailable_reason)),
-                Some(handler) => match handler.validate(action) {
+                Some(handler) => match handler.validate(&action) {
                     Err(error) => (PlanClassification::Invalid, Some(error.to_string())),
                     Ok(()) if !missing_capabilities.is_empty() => (
                         PlanClassification::BlockedByMissingCapability,
@@ -582,6 +584,28 @@ impl<'a> Planner<'a> {
 
         Ok(())
     }
+}
+
+fn enrich_workspace_context(
+    action: &mut ActionSpec,
+    configuration: &crate::domain::EnvironmentConfig,
+) {
+    let workspace_id = action
+        .desktop_workspace
+        .as_ref()
+        .or(action.parameters.workspace_id.as_ref());
+    let Some(workspace_id) = workspace_id else {
+        return;
+    };
+    let Some(workspace) = configuration
+        .workspaces
+        .iter()
+        .find(|workspace| &workspace.id == workspace_id)
+    else {
+        return;
+    };
+    action.resolved_workspace_target = Some(workspace.target.clone());
+    action.resolved_tiling = Some(workspace.tiling);
 }
 
 pub(crate) async fn run_readiness_checks(

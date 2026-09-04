@@ -4,6 +4,74 @@ use crate::{
     platform::{DesktopEnvironment, normalize_token, safe_display},
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CosmicOperation {
+    GetWorkspaces,
+    GetWindows,
+    SetTiling { workspace: String, enabled: bool },
+    MoveWindow { window: String, workspace: String },
+    CloseWindow { window: String },
+    FocusWindow { window: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CosmicCommand {
+    program: String,
+}
+
+impl CosmicCommand {
+    pub fn new(program: impl Into<String>) -> Self {
+        Self {
+            program: program.into(),
+        }
+    }
+
+    pub fn program(&self) -> &str {
+        &self.program
+    }
+
+    pub fn arguments(&self, operation: &CosmicOperation) -> Vec<String> {
+        let mut arguments = vec!["--json".to_owned()];
+        match operation {
+            CosmicOperation::GetWorkspaces => arguments.push("get-workspaces".to_owned()),
+            CosmicOperation::GetWindows => arguments.push("get-toplevels".to_owned()),
+            CosmicOperation::SetTiling { workspace, enabled } => {
+                arguments.extend([
+                    "workspace".to_owned(),
+                    "set-tiling".to_owned(),
+                    workspace.clone(),
+                    if *enabled {
+                        "enabled".to_owned()
+                    } else {
+                        "disabled".to_owned()
+                    },
+                ]);
+            }
+            CosmicOperation::MoveWindow { window, workspace } => {
+                arguments.extend([
+                    "window".to_owned(),
+                    "move-to-workspace".to_owned(),
+                    window.clone(),
+                    workspace.clone(),
+                ]);
+            }
+            CosmicOperation::CloseWindow { window } => {
+                arguments.extend(["window".to_owned(), "close".to_owned(), window.clone()]);
+            }
+            CosmicOperation::FocusWindow { window } => {
+                arguments.extend(["window".to_owned(), "activate".to_owned(), window.clone()]);
+            }
+        }
+        arguments
+    }
+}
+
+impl Default for CosmicCommand {
+    fn default() -> Self {
+        Self::new("cosmicmsg")
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CosmicDetector;
 

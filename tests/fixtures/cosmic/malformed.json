@@ -1,0 +1,16 @@
+[
+  {
+    "id": "duplicate",
+    "name": "First",
+    "coordinates": [0],
+    "active": true,
+    "tiling": "enabled"
+  },
+  {
+    "id": "duplicate",
+    "name": "Second",
+    "coordinates": [1],
+    "active": false,
+    "tiling": "disabled"
+  }
+]
