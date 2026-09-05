@@ -974,6 +974,7 @@ fn field_label(field: super::editor::EditorField) -> &'static str {
     match field {
         super::editor::EditorField::EnvironmentName => "environment name",
         super::editor::EditorField::ActionDisplayLabel => "action label",
+        super::editor::EditorField::ApplicationArguments => "application arguments",
         super::editor::EditorField::WorkingDirectory => "working directory",
         super::editor::EditorField::ProjectPath => "project path",
         super::editor::EditorField::CommandProgram => "command",

@@ -137,10 +137,7 @@ impl CommandSpec {
     }
 
     pub fn from_argv_line(action_id: &ActionId, line: &str) -> Result<Self, DomainError> {
-        let tokens = tokenize_argv_line(line).map_err(|message| DomainError::InvalidCommand {
-            action_id: action_id.to_string(),
-            message,
-        })?;
+        let tokens = Self::arguments_from_argv_line(action_id, line)?;
         let Some((program, arguments)) = tokens.split_first() else {
             return Err(DomainError::InvalidCommand {
                 action_id: action_id.to_string(),
@@ -150,6 +147,19 @@ impl CommandSpec {
         let mut command = Self::new(program.clone());
         command.arguments = arguments.to_vec();
         Ok(command)
+    }
+
+    pub fn arguments_from_argv_line(
+        action_id: &ActionId,
+        line: &str,
+    ) -> Result<Vec<String>, DomainError> {
+        if line.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        tokenize_argv_line(line).map_err(|message| DomainError::InvalidCommand {
+            action_id: action_id.to_string(),
+            message,
+        })
     }
 
     pub fn display_line(&self) -> String {
@@ -482,6 +492,8 @@ pub struct ActionParameters {
     #[serde(default)]
     pub application: Option<String>,
     #[serde(default)]
+    pub application_arguments: Vec<String>,
+    #[serde(default)]
     pub project_path: Option<String>,
     #[serde(default)]
     pub command: Option<CommandSpec>,
@@ -719,6 +731,11 @@ impl ActionSpec {
         match &self.kind {
             ActionKind::OpenApplication => {
                 require_text(&self.parameters.application, action_id, "application")?;
+                validate_text_arguments(
+                    &self.parameters.application_arguments,
+                    action_id,
+                    "application_arguments",
+                )?;
                 reject_execution_mode(self, action_id)?;
             }
             ActionKind::OpenProject => {
@@ -815,6 +832,24 @@ fn reject_execution_mode(action: &ActionSpec, action_id: &ActionId) -> Result<()
     Ok(())
 }
 
+fn validate_text_arguments(
+    arguments: &[String],
+    action_id: &ActionId,
+    parameter: &str,
+) -> Result<(), DomainError> {
+    if arguments
+        .iter()
+        .any(|argument| argument.contains('\0') || argument.chars().any(char::is_control))
+    {
+        return Err(DomainError::InvalidActionParameter {
+            action_id: action_id.to_string(),
+            parameter: parameter.to_owned(),
+        });
+    }
+
+    Ok(())
+}
+
 fn default_max_attempts() -> u32 {
     1
 }
@@ -879,6 +914,20 @@ mod tests {
             return;
         };
         action.execution_mode = Some(ExecutionMode::Background);
+        assert!(action.validate().is_err());
+    }
+
+    #[test]
+    fn open_application_arguments_are_validated_as_separate_values() {
+        let Some(mut action) = ActionSpec::new("editor", ActionKind::OpenApplication).ok() else {
+            return;
+        };
+        action.parameters.application = Some("org.example.Editor".to_owned());
+        action.parameters.application_arguments =
+            vec!["--new-window".to_owned(), "project folder".to_owned()];
+        assert!(action.validate().is_ok());
+
+        action.parameters.application_arguments = vec!["invalid\nargument".to_owned()];
         assert!(action.validate().is_err());
     }
 

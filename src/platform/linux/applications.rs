@@ -5,13 +5,20 @@ use std::{
 };
 
 use crate::{
-    application::ports::{ApplicationCatalog, InstalledApplication},
+    application::ports::{ApplicationCatalog, ApplicationLaunchSpec, InstalledApplication},
+    domain::{ActionId, CommandSpec},
     error::{ErrorCategory, Result, WorkstateError},
 };
 
 #[derive(Debug, Clone)]
 pub struct LinuxApplicationCatalog {
     directories: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedDesktopEntry {
+    application: InstalledApplication,
+    launch: Option<ApplicationLaunchSpec>,
 }
 
 impl LinuxApplicationCatalog {
@@ -37,12 +44,12 @@ impl ApplicationCatalog for LinuxApplicationCatalog {
         let mut applications = BTreeMap::new();
         for directory in &self.directories {
             for path in desktop_files(directory)? {
-                let Some(application) = parse_desktop_entry(&path)? else {
+                let Some(parsed) = parse_desktop_entry(&path)? else {
                     continue;
                 };
                 applications
-                    .entry(application.id.clone())
-                    .or_insert(application);
+                    .entry(parsed.application.id.clone())
+                    .or_insert(parsed.application);
             }
         }
 
@@ -54,6 +61,37 @@ impl ApplicationCatalog for LinuxApplicationCatalog {
                 .then_with(|| left.id.cmp(&right.id))
         });
         Ok(applications)
+    }
+
+    fn launch_spec(&self, application_id: &str) -> Result<ApplicationLaunchSpec> {
+        let mut found = false;
+        for directory in &self.directories {
+            for path in desktop_files(directory)? {
+                let Some(parsed) = parse_desktop_entry(&path)? else {
+                    continue;
+                };
+                if parsed.application.id == application_id {
+                    found = true;
+                    if let Some(launch) = parsed.launch {
+                        return Ok(launch);
+                    }
+                }
+            }
+        }
+
+        Err(WorkstateError::new(
+            ErrorCategory::Platform,
+            if found {
+                format!(
+                    "installed application '{application_id}' does not expose a safe executable launch command"
+                )
+            } else {
+                format!(
+                    "installed application '{application_id}' could not be resolved to a launch command"
+                )
+            },
+        )
+        .with_context("application_id", application_id.to_owned()))
     }
 }
 
@@ -125,7 +163,7 @@ fn desktop_files(directory: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn parse_desktop_entry(path: &Path) -> Result<Option<InstalledApplication>> {
+fn parse_desktop_entry(path: &Path) -> Result<Option<ParsedDesktopEntry>> {
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
         Err(error)
@@ -141,17 +179,20 @@ fn parse_desktop_entry(path: &Path) -> Result<Option<InstalledApplication>> {
         Err(error) => return Err(io_error("reading application metadata", path, error)),
     };
 
-    Ok(parse_desktop_entry_contents(&contents, path))
+    Ok(parse_desktop_entry_contents_with_launch(&contents, path))
 }
 
-fn parse_desktop_entry_contents(contents: &str, path: &Path) -> Option<InstalledApplication> {
+fn parse_desktop_entry_contents_with_launch(
+    contents: &str,
+    path: &Path,
+) -> Option<ParsedDesktopEntry> {
     let mut in_desktop_entry = false;
     let mut application_type = false;
     let mut hidden = false;
     let mut no_display = false;
     let mut dbus_activatable = false;
     let mut name = None;
-    let mut has_exec = false;
+    let mut exec = None;
 
     for line in contents.lines() {
         let line = line.trim();
@@ -177,12 +218,12 @@ fn parse_desktop_entry_contents(contents: &str, path: &Path) -> Option<Installed
             "Hidden" => hidden = is_true(value),
             "NoDisplay" => no_display = is_true(value),
             "DBusActivatable" => dbus_activatable = is_true(value),
-            "Exec" => has_exec = !value.is_empty(),
+            "Exec" => exec = (!value.is_empty()).then(|| value.to_owned()),
             _ => {}
         }
     }
 
-    if !application_type || hidden || no_display || (!has_exec && !dbus_activatable) {
+    if !application_type || hidden || no_display || (exec.is_none() && !dbus_activatable) {
         return None;
     }
     let name = name?;
@@ -195,10 +236,52 @@ fn parse_desktop_entry_contents(contents: &str, path: &Path) -> Option<Installed
         return None;
     }
 
-    Some(InstalledApplication {
-        id: id.to_owned(),
-        name,
+    let launch = exec.as_deref().and_then(parse_exec_line);
+    Some(ParsedDesktopEntry {
+        application: InstalledApplication {
+            id: id.to_owned(),
+            name,
+        },
+        launch,
     })
+}
+
+fn parse_exec_line(line: &str) -> Option<ApplicationLaunchSpec> {
+    let action_id = ActionId::new("desktop-entry").ok()?;
+    let command = CommandSpec::from_argv_line(&action_id, line).ok()?;
+    let program = expand_exec_token(&command.program)??;
+    if program.is_empty() {
+        return None;
+    }
+    let mut arguments = Vec::new();
+    for argument in command.arguments {
+        if let Some(argument) = expand_exec_token(&argument)? {
+            arguments.push(argument);
+        }
+    }
+    Some(ApplicationLaunchSpec { program, arguments })
+}
+
+fn expand_exec_token(token: &str) -> Option<Option<String>> {
+    let mut expanded = String::with_capacity(token.len());
+    let mut field_code = false;
+    let mut characters = token.chars();
+    while let Some(character) = characters.next() {
+        if character != '%' {
+            expanded.push(character);
+            continue;
+        }
+        let code = characters.next()?;
+        match code {
+            '%' => expanded.push('%'),
+            'f' | 'F' | 'u' | 'U' | 'i' | 'c' | 'k' => field_code = true,
+            _ => return None,
+        }
+    }
+    if field_code && expanded.is_empty() {
+        return Some(None);
+    }
+    Some(Some(expanded))
 }
 
 fn is_true(value: &str) -> bool {
@@ -216,18 +299,66 @@ mod tests {
 
     use crate::application::ports::ApplicationCatalog;
 
-    use super::{LinuxApplicationCatalog, parse_desktop_entry_contents};
+    use super::{LinuxApplicationCatalog, parse_desktop_entry_contents_with_launch};
 
     #[test]
     fn parses_a_visible_launchable_application() {
         let contents = "[Desktop Entry]\nType=Application\nName=Editor\nExec=editor\n";
-        let parsed =
-            parse_desktop_entry_contents(contents, Path::new("org.example.Editor.desktop"));
+        let parsed = parse_desktop_entry_contents_with_launch(
+            contents,
+            Path::new("org.example.Editor.desktop"),
+        );
         assert!(parsed.is_some());
-        if let Some(application) = parsed {
-            assert_eq!(application.id, "org.example.Editor");
-            assert_eq!(application.name, "Editor");
+        if let Some(parsed) = parsed {
+            assert_eq!(parsed.application.id, "org.example.Editor");
+            assert_eq!(parsed.application.name, "Editor");
         }
+    }
+
+    #[test]
+    fn resolves_desktop_entry_arguments_without_field_code_values() {
+        let contents = "[Desktop Entry]\nType=Application\nName=Editor\nExec=code --new-window %F \"two words\"\n";
+        let parsed = parse_desktop_entry_contents_with_launch(
+            contents,
+            Path::new("org.example.Editor.desktop"),
+        );
+        assert!(parsed.is_some());
+        let Some(parsed) = parsed else {
+            return;
+        };
+        let Some(launch) = parsed.launch else {
+            return;
+        };
+        assert_eq!(launch.program, "code");
+        assert_eq!(
+            launch.arguments,
+            vec!["--new-window".to_owned(), "two words".to_owned()]
+        );
+    }
+
+    #[test]
+    fn catalog_resolves_a_launch_spec_for_a_selected_application() {
+        let Ok(directory) = tempfile::tempdir() else {
+            return;
+        };
+        let path = directory.path().join("browser.desktop");
+        if fs::write(
+            &path,
+            "[Desktop Entry]\nType=Application\nName=Browser\nExec=browser --private-window\n",
+        )
+        .is_err()
+        {
+            return;
+        }
+
+        let catalog = LinuxApplicationCatalog::with_directories(vec![directory.path().to_owned()]);
+        let launch = catalog.launch_spec("browser");
+        assert!(launch.is_ok());
+        let Some(launch) = launch.ok() else {
+            return;
+        };
+        assert_eq!(launch.program, "browser");
+        assert_eq!(launch.arguments, vec!["--private-window".to_owned()]);
     }
 
     #[test]

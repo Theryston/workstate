@@ -160,6 +160,8 @@ Start Android Emulator
 
 The `Open application` action must configure its `Application` field through a scrollable selector populated by the injected platform application catalog. Do not render this field as free-form text. On Linux, the selector lists visible launchable desktop entries, showing each friendly name with its desktop-entry ID as secondary detail, and persists the selected ID in the existing action parameter. If the catalog cannot be read or has no entries, show an English error and prevent arbitrary application values from being entered.
 
+The `Open application` inspector must also provide an `Arguments` text field. Edit it as a normal focused text input with a visible cursor and the shared argv quoting rules used by command input. Persist the parsed values as separate arguments and append them to the selected application's launch specification at runtime. Do not route these arguments through a shell or expose the desktop entry's executable as an editable field.
+
 Backend-specific fields may appear after the user selects a relevant action. For example, tmux details may be shown for a persistent terminal action, and Zed details may be shown for an open-project action.
 
 ### 6. Implement action forms

@@ -8,6 +8,7 @@ The integration must let an environment:
 
 - Resolve an action to the current workspace, a specific existing workspace, the next empty workspace, or a newly created workspace.
 - Open or reuse a Zed window for an explicitly configured project directory.
+- Open or reuse any discovered installed application with an explicitly configured working directory and optional argv arguments.
 - Move an owned window to the workspace selected by the environment.
 - Enable tiling only when the environment requests it for that workspace.
 - Record every desktop mutation needed to restore the previous state during stop or rollback.
@@ -33,6 +34,7 @@ The platform registry must reject unsupported desktops before this integration i
 - COSMIC window observation and movement.
 - COSMIC tiling observation and mutation.
 - Zed process discovery and launch.
+- Generic installed-application discovery, launch-spec resolution, argument passing, and ownership-aware cleanup.
 - Reusing an already-open matching Zed project window when it can be identified safely.
 - Waiting for a launched Zed window to become observable.
 - Ownership-aware cleanup and restoration.
@@ -41,7 +43,7 @@ The platform registry must reject unsupported desktops before this integration i
 ### Out of scope
 
 - GNOME, KDE, Windows, WSL, or any other desktop backend.
-- General-purpose window management for applications other than resources modeled by Workstate.
+- General-purpose window management unrelated to an `Open application` action.
 - Reproducing or migrating the earlier shell scripts.
 - Guessing a project directory from the caller's current directory.
 
@@ -58,7 +60,9 @@ src/integrations/cosmic/errors.rs
 src/integrations/zed/mod.rs
 src/integrations/zed/backend.rs
 src/integrations/zed/errors.rs
+src/integrations/application/mod.rs
 src/application/ports/desktop.rs
+src/application/ports/applications.rs
 src/application/ports/editor.rs
 tests/fakes/fake_desktop.rs
 tests/fakes/fake_editor.rs
@@ -135,7 +139,18 @@ Implement a deterministic resolver for the workspace target declared by an actio
 11. Support any number of Zed project actions in one environment. Derive the action's identity key from its resolved project directory, never from `ActionKind` alone.
 12. If desktop observation does not expose project metadata, serialize the launch-and-observe handoff, refresh the pre-launch snapshot after acquiring the coordination, and correlate only windows that appeared during that handoff. On later runs, a persisted canonical project key may be matched to its persisted stable window identity after verifying that the current window is still a Zed window; a title-only match is never sufficient.
 
-### 6. Integrate with reconciliation and rollback
+### 6. Implement generic application launch
+
+1. Resolve the selected application ID through the injected application catalog.
+2. Keep the platform-native desktop entry ID as the persisted application identity and use its launch specification only at execution time.
+3. Parse desktop entry `Exec` data at the Linux adapter boundary, remove field-code placeholders that require external files or URLs, and reject malformed or unsupported launch entries.
+4. Parse the action's `Arguments` field into separate argv values and append them to the desktop entry's static arguments.
+5. Pass the executable, static arguments, user arguments, and resolved working directory through `ProcessRequest`; never build a shell command string.
+6. Observe an existing matching application window before launching and treat a matching application identity as already correct regardless of its current desktop workspace.
+7. Correlate newly observed windows with the launch handoff, record their ownership, place them on the requested workspace, and close only those owned windows during stop or rollback.
+8. If a launched application does not become observable, stop the owned background process when the backend can identify it and return the original error with cleanup context.
+
+### 7. Integrate with reconciliation and rollback
 
 1. Make each desktop and editor action idempotent.
 2. On rerun, observe each action's resource key independently from its workspace placement and return unchanged or repaired outcomes instead of blindly launching duplicate Zed windows or toggling tiling.
@@ -145,7 +160,7 @@ Implement a deterministic resolver for the workspace target declared by an actio
 6. If rollback is incomplete, return the original error plus a structured cleanup warning and persist enough state for a later stop attempt.
 7. Shared-resource checks must happen before closing a Zed window or restoring a workspace setting.
 
-### 7. Add user-facing operation events
+### 8. Add user-facing operation events
 
 Emit concise English events for:
 

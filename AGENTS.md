@@ -544,6 +544,8 @@ For Zed, the project folder is explicit and is the action's reconciliation key. 
 
 The `Open application` inspector field is a resource selector, never a free-form text field. The editor receives its options from the injected `ApplicationCatalog` port for the detected platform. The initial Linux implementation discovers visible, launchable `.desktop` entries from the standard user, system, Flatpak, and Snap application directories. The persisted application value is the platform-native desktop-entry ID; the editor displays the friendly application name and keeps the ID as secondary detail. If discovery is unavailable or returns no applications, the editor must show an actionable error and must not accept an arbitrary application name.
 
+The `Open application` action also exposes an `Arguments` text field. It accepts an argv line with the same quoting rules as command editing, persists the parsed arguments as a vector, and appends them to the selected desktop entry's launch arguments. Application arguments must be passed directly through `ProcessRequest`; they must never be interpolated into a shell command. The desktop entry's static `Exec` arguments remain separate from user-provided arguments so the application selector stays platform-native while the action remains configurable for applications such as VS Code, Chrome, Slack, or any other discovered launchable application.
+
 ### 8.7 Command execution modes
 
 Every command action must declare one of these modes:
@@ -1306,7 +1308,7 @@ The action palette is opened with `a` while the action list is focused. It may l
 The contextual field contract for the initial action kinds is:
 
 ```text
-Open application          action name, application, working directory,
+Open application          action name, application, arguments, working directory,
                            desktop workspace, dependencies
 Open Project with Zed     action name, project path, desktop workspace,
                            dependencies

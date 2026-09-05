@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crate::{
     application::ports::{
-        BoxFuture, DesktopBackend, DesktopOperationOutcome, DesktopSnapshot, ProcessOutput,
-        ProcessRequest, ProcessRunner,
+        BackgroundProcess, BoxFuture, DesktopBackend, DesktopOperationOutcome, DesktopSnapshot,
+        ProcessOutput, ProcessRequest, ProcessRunner,
     },
     error::{ErrorCategory, Result, WorkstateError},
     platform::desktop::cosmic::{CosmicCommand, CosmicOperation},
@@ -108,6 +108,28 @@ impl DesktopBackend for CosmicBackend {
                     .into_workstate()
                 })?;
             Ok(DesktopOperationOutcome::created(Some(process.identity)))
+        })
+    }
+
+    fn stop_application<'a>(
+        &'a self,
+        process_identity: &'a str,
+    ) -> BoxFuture<'a, Result<DesktopOperationOutcome>> {
+        Box::pin(async move {
+            let process = BackgroundProcess::new(process_identity.to_owned())?;
+            self.runner
+                .stop_background(process)
+                .await
+                .map_err(|source| {
+                    CosmicError::CommandFailed {
+                        operation: "stop-application".to_owned(),
+                        detail: source.render(),
+                    }
+                    .into_workstate()
+                })?;
+            Ok(DesktopOperationOutcome::changed(Some(
+                process_identity.to_owned(),
+            )))
         })
     }
 

@@ -20,7 +20,7 @@ pub use android::{
     EmulatorBackend, EmulatorCleanupOutcome, EmulatorEnsureOutcome, EmulatorObservation,
     EmulatorOperationStatus, EmulatorRequest, EmulatorRuntimeSnapshot,
 };
-pub use applications::{ApplicationCatalog, InstalledApplication};
+pub use applications::{ApplicationCatalog, ApplicationLaunchSpec, InstalledApplication};
 pub use clock::{Clock, SystemClock};
 pub use containers::ContainerBackend;
 pub use desktop::{

@@ -32,6 +32,7 @@ pub enum EditorPanel {
 pub enum EditorField {
     EnvironmentName,
     ActionDisplayLabel,
+    ApplicationArguments,
     WorkingDirectory,
     ProjectPath,
     CommandProgram,
@@ -45,6 +46,7 @@ pub enum EditorField {
 pub enum InspectorField {
     ActionLabel,
     Application,
+    ApplicationArguments,
     ProjectPath,
     WorkingDirectory,
     Command,
@@ -63,6 +65,7 @@ impl InspectorField {
         match self {
             Self::ActionLabel => "Action name",
             Self::Application => "Application",
+            Self::ApplicationArguments => "Arguments",
             Self::ProjectPath => "Project path",
             Self::WorkingDirectory => "Working directory",
             Self::Command => "Command",
@@ -385,6 +388,7 @@ impl EditorState {
         match &action.kind {
             ActionKind::OpenApplication => fields.extend([
                 InspectorField::Application,
+                InspectorField::ApplicationArguments,
                 InspectorField::WorkingDirectory,
                 InspectorField::DesktopWorkspace,
             ]),
@@ -464,6 +468,9 @@ impl EditorState {
                 .as_ref()
                 .map(|id| self.application_label(id))
                 .unwrap_or_else(|| "not set".to_owned()),
+            InspectorField::ApplicationArguments => {
+                application_arguments_label(&action.parameters.application_arguments)
+            }
             InspectorField::Tiling => action
                 .desktop_workspace
                 .as_ref()
@@ -690,6 +697,32 @@ impl EditorState {
             ));
         }
         action.parameters.application = application;
+        self.mark_dirty();
+        Ok(())
+    }
+
+    pub fn set_action_application_arguments(
+        &mut self,
+        action_id: &ActionId,
+        arguments: Vec<String>,
+    ) -> Result<()> {
+        let action = self.action_mut(action_id)?;
+        if !matches!(&action.kind, ActionKind::OpenApplication) {
+            return Err(WorkstateError::new(
+                ErrorCategory::Ui,
+                format!("application arguments are not available for action '{action_id}'"),
+            ));
+        }
+        if arguments
+            .iter()
+            .any(|argument| argument.contains('\0') || argument.chars().any(char::is_control))
+        {
+            return Err(WorkstateError::new(
+                ErrorCategory::Ui,
+                "application arguments must not contain control characters",
+            ));
+        }
+        action.parameters.application_arguments = arguments;
         self.mark_dirty();
         Ok(())
     }
@@ -1104,6 +1137,9 @@ impl EditorState {
         match field {
             InspectorField::ActionLabel => self.begin_input(EditorField::ActionDisplayLabel),
             InspectorField::Application => self.open_application_picker(),
+            InspectorField::ApplicationArguments => {
+                self.begin_input(EditorField::ApplicationArguments)
+            }
             InspectorField::ProjectPath => {
                 self.begin_input_with_directory_catalog(EditorField::ProjectPath, directory_catalog)
             }
@@ -1701,6 +1737,17 @@ impl EditorState {
                 .map(|action| action.id.clone())
                 .ok_or_else(|| WorkstateError::new(ErrorCategory::Ui, "no action is selected"))
                 .and_then(|action_id| self.set_action_display_label(&action_id, value)),
+            EditorField::ApplicationArguments => self
+                .selected_action_spec()
+                .map(|action| action.id.clone())
+                .ok_or_else(|| WorkstateError::new(ErrorCategory::Ui, "no action is selected"))
+                .and_then(|action_id| {
+                    CommandSpec::arguments_from_argv_line(&action_id, &value)
+                        .map_err(WorkstateError::from)
+                        .and_then(|arguments| {
+                            self.set_action_application_arguments(&action_id, arguments)
+                        })
+                }),
             EditorField::WorkingDirectory => self
                 .selected_action_spec()
                 .map(|action| action.id.clone())
@@ -1771,6 +1818,10 @@ impl EditorState {
             EditorField::ActionDisplayLabel => self
                 .selected_action_spec()
                 .and_then(|action| action.display_label.clone())
+                .unwrap_or_default(),
+            EditorField::ApplicationArguments => self
+                .selected_action_spec()
+                .map(|action| application_arguments_input(&action.parameters.application_arguments))
                 .unwrap_or_default(),
             EditorField::WorkingDirectory => self
                 .selected_action_spec()
@@ -2403,6 +2454,7 @@ fn validation_field(error: &DomainError) -> Option<InspectorField> {
         | DomainError::InvalidActionParameter { parameter, .. } => match parameter.as_str() {
             "display_label" => Some(InspectorField::ActionLabel),
             "application" => Some(InspectorField::Application),
+            "application_arguments" => Some(InspectorField::ApplicationArguments),
             "project_path" => Some(InspectorField::ProjectPath),
             "working_directory" => Some(InspectorField::WorkingDirectory),
             "command" => Some(InspectorField::Command),
@@ -2423,6 +2475,29 @@ fn validation_field(error: &DomainError) -> Option<InspectorField> {
 
 fn command_label(command: &CommandSpec) -> String {
     command.display_line()
+}
+
+fn application_arguments_input(arguments: &[String]) -> String {
+    if arguments.is_empty() {
+        return String::new();
+    }
+    let mut command = CommandSpec::new("application");
+    command.arguments = arguments.to_vec();
+    command
+        .display_line()
+        .strip_prefix("application")
+        .unwrap_or_default()
+        .trim_start()
+        .to_owned()
+}
+
+fn application_arguments_label(arguments: &[String]) -> String {
+    let value = application_arguments_input(arguments);
+    if value.is_empty() {
+        "not set".to_owned()
+    } else {
+        value
+    }
 }
 
 fn workspace_target_label(workspace: &WorkspaceSpec) -> String {
@@ -3073,6 +3148,44 @@ mod tests {
         assert_eq!(
             editor.inspector_field_value(super::InspectorField::Application),
             "Browser (org.example.Browser)"
+        );
+    }
+
+    #[test]
+    fn open_application_exposes_and_parses_custom_arguments() {
+        let Some(configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let mut editor = EditorState::new(configuration, EditorMode::Create);
+        let action_id = editor.add_action_from_palette(0);
+        assert!(action_id.is_ok());
+        assert_eq!(
+            editor.inspector_fields(),
+            vec![
+                InspectorField::ActionLabel,
+                InspectorField::Application,
+                InspectorField::ApplicationArguments,
+                InspectorField::WorkingDirectory,
+                InspectorField::DesktopWorkspace,
+                InspectorField::Dependencies,
+            ]
+        );
+
+        editor.begin_input(EditorField::ApplicationArguments);
+        for character in "--new-window \"my project\"".chars() {
+            editor.handle_key(KeyCode::Char(character));
+        }
+        editor.handle_key(KeyCode::Enter);
+
+        assert_eq!(
+            editor
+                .selected_action_spec()
+                .map(|action| action.parameters.application_arguments.clone()),
+            Some(vec!["--new-window".to_owned(), "my project".to_owned()])
+        );
+        assert_eq!(
+            editor.inspector_field_value(InspectorField::ApplicationArguments),
+            "--new-window 'my project'"
         );
     }
 

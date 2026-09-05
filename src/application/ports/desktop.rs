@@ -154,6 +154,18 @@ pub trait DesktopBackend: Send + Sync {
         })
     }
 
+    fn stop_application<'a>(
+        &'a self,
+        _process_identity: &'a str,
+    ) -> BoxFuture<'a, Result<DesktopOperationOutcome>> {
+        Box::pin(async {
+            Err(WorkstateError::new(
+                ErrorCategory::Platform,
+                "desktop application process cleanup is not configured",
+            ))
+        })
+    }
+
     fn create_workspace<'a>(
         &'a self,
         _name: &'a str,

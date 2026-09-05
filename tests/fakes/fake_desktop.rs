@@ -6,7 +6,10 @@ use std::sync::{
 };
 
 use workstate::{
-    application::ports::{BoxFuture, DesktopBackend, DesktopOperationOutcome, DesktopSnapshot},
+    application::ports::{
+        BoxFuture, DesktopBackend, DesktopOperationOutcome, DesktopSnapshot, DesktopWindowSnapshot,
+        ProcessRequest,
+    },
     error::{ErrorCategory, Result, WorkstateError},
 };
 
@@ -15,6 +18,9 @@ pub struct FakeDesktop {
     state: Arc<Mutex<DesktopSnapshot>>,
     calls: Arc<Mutex<Vec<String>>>,
     fail_next_moves: Arc<AtomicUsize>,
+    application_launch_window: Arc<Mutex<Option<DesktopWindowSnapshot>>>,
+    application_requests: Arc<Mutex<Vec<ProcessRequest>>>,
+    stopped_applications: Arc<Mutex<Vec<String>>>,
 }
 
 impl FakeDesktop {
@@ -23,6 +29,9 @@ impl FakeDesktop {
             state: Arc::new(Mutex::new(state)),
             calls: Arc::new(Mutex::new(Vec::new())),
             fail_next_moves: Arc::new(AtomicUsize::new(0)),
+            application_launch_window: Arc::new(Mutex::new(None)),
+            application_requests: Arc::new(Mutex::new(Vec::new())),
+            stopped_applications: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -40,6 +49,33 @@ impl FakeDesktop {
 
     pub fn fail_next_move(&self) {
         self.fail_next_moves.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub fn set_application_launch_window(&self, window: DesktopWindowSnapshot) -> Result<()> {
+        self.application_launch_window
+            .lock()
+            .map(|mut current| *current = Some(window))
+            .map_err(|_| {
+                WorkstateError::new(ErrorCategory::Runtime, "fake desktop state lock failed")
+            })
+    }
+
+    pub fn application_requests(&self) -> Result<Vec<ProcessRequest>> {
+        self.application_requests
+            .lock()
+            .map(|requests| requests.clone())
+            .map_err(|_| {
+                WorkstateError::new(ErrorCategory::Runtime, "fake desktop request lock failed")
+            })
+    }
+
+    pub fn stopped_applications(&self) -> Result<Vec<String>> {
+        self.stopped_applications
+            .lock()
+            .map(|identities| identities.clone())
+            .map_err(|_| {
+                WorkstateError::new(ErrorCategory::Runtime, "fake desktop process lock failed")
+            })
     }
 
     pub fn add_window(
@@ -98,6 +134,68 @@ impl DesktopBackend for FakeDesktop {
                     WorkstateError::new(ErrorCategory::Runtime, "fake desktop call lock failed")
                 })?;
             Ok(DesktopOperationOutcome::created(Some(identity)))
+        })
+    }
+
+    fn open_application<'a>(
+        &'a self,
+        request: ProcessRequest,
+    ) -> BoxFuture<'a, Result<DesktopOperationOutcome>> {
+        let state = Arc::clone(&self.state);
+        let calls = Arc::clone(&self.calls);
+        let launch_window = Arc::clone(&self.application_launch_window);
+        let requests = Arc::clone(&self.application_requests);
+        Box::pin(async move {
+            requests
+                .lock()
+                .map(|mut current| current.push(request.clone()))
+                .map_err(|_| {
+                    WorkstateError::new(ErrorCategory::Runtime, "fake desktop request lock failed")
+                })?;
+            let window = launch_window
+                .lock()
+                .map_err(|_| {
+                    WorkstateError::new(ErrorCategory::Runtime, "fake desktop state lock failed")
+                })?
+                .clone()
+                .ok_or_else(|| {
+                    WorkstateError::new(
+                        ErrorCategory::Platform,
+                        "fake application launch window is not configured",
+                    )
+                })?;
+            state
+                .lock()
+                .map(|mut state| state.windows.push(window))
+                .map_err(|_| {
+                    WorkstateError::new(ErrorCategory::Runtime, "fake desktop state lock failed")
+                })?;
+            calls
+                .lock()
+                .map(|mut calls| calls.push(format!("open-application:{}", request.program)))
+                .map_err(|_| {
+                    WorkstateError::new(ErrorCategory::Runtime, "fake desktop call lock failed")
+                })?;
+            Ok(DesktopOperationOutcome::created(Some(
+                "fake-application-process".to_owned(),
+            )))
+        })
+    }
+
+    fn stop_application<'a>(
+        &'a self,
+        process_identity: &'a str,
+    ) -> BoxFuture<'a, Result<DesktopOperationOutcome>> {
+        let stopped = Arc::clone(&self.stopped_applications);
+        let identity = process_identity.to_owned();
+        Box::pin(async move {
+            stopped
+                .lock()
+                .map(|mut identities| identities.push(identity.clone()))
+                .map_err(|_| {
+                    WorkstateError::new(ErrorCategory::Runtime, "fake desktop process lock failed")
+                })?;
+            Ok(DesktopOperationOutcome::changed(Some(identity)))
         })
     }
 

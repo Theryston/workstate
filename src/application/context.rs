@@ -228,6 +228,12 @@ impl AppContext {
                     &mut handlers,
                     Arc::clone(&desktop),
                 )?;
+                crate::integrations::application::register_handlers(
+                    &mut handlers,
+                    Arc::clone(&application_catalog),
+                    Arc::clone(&desktop),
+                    Arc::clone(&file_system),
+                )?;
                 crate::integrations::zed::register_handlers(
                     &mut handlers,
                     Arc::clone(&zed),
