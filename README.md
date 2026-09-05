@@ -398,8 +398,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 ## 📄 License
 
-Workstate is currently in active development. License information will be
-published with the first stable release.
+It's [MIT licensed](LICENSE).
 
 ---
 
