@@ -17,6 +17,7 @@ use crate::{
         platform::PlatformDetector,
         process::{BoxFuture, ProcessOutput, ProcessRequest, ProcessRunner},
         terminal::TerminalBackend,
+        tmux::TmuxBackend,
     },
     application::{
         planner::{ActionHandlerRegistry, NoopReadinessCheckRunner, ReadinessCheckRunner},
@@ -27,9 +28,9 @@ use crate::{
     infrastructure::{
         filesystem::{LocalDirectoryCatalog, local::LocalFileSystem},
         persistence::{TomlConfigStore, TomlStateStore, WorkstatePaths},
-        process::LocalProcessRunner,
+        process::TokioProcessRunner,
     },
-    integrations::{CosmicBackend, IntegrationRegistry, ZedBackend},
+    integrations::{CosmicBackend, IntegrationRegistry, TmuxProcessBackend, ZedBackend},
     platform::{
         DesktopEnvironment, DetectedPlatform, Distribution, OperatingSystem, TerminalCapability,
     },
@@ -50,6 +51,7 @@ pub struct AppDependencies {
     pub platform_detector: Arc<dyn PlatformDetector>,
     pub desktop_backend: Arc<dyn DesktopBackend>,
     pub terminal_backend: Arc<dyn TerminalBackend>,
+    pub tmux_backend: Arc<dyn TmuxBackend>,
     pub container_backend: Arc<dyn ContainerBackend>,
     pub editor_backend: Arc<dyn EditorBackend>,
     pub emulator_backend: Arc<dyn EmulatorBackend>,
@@ -72,6 +74,7 @@ impl AppDependencies {
             }),
             desktop_backend: Arc::new(UnavailableBackend::new("desktop backend")),
             terminal_backend: Arc::new(UnavailableBackend::new("terminal backend")),
+            tmux_backend: Arc::new(UnavailableBackend::new("tmux backend")),
             container_backend: Arc::new(UnavailableBackend::new("container backend")),
             editor_backend: Arc::new(UnavailableBackend::new("editor backend")),
             emulator_backend: Arc::new(UnavailableBackend::new("emulator backend")),
@@ -91,6 +94,7 @@ pub struct AppContext {
     platform_detector: Arc<dyn PlatformDetector>,
     desktop_backend: Arc<dyn DesktopBackend>,
     terminal_backend: Arc<dyn TerminalBackend>,
+    tmux_backend: Arc<dyn TmuxBackend>,
     container_backend: Arc<dyn ContainerBackend>,
     editor_backend: Arc<dyn EditorBackend>,
     emulator_backend: Arc<dyn EmulatorBackend>,
@@ -112,6 +116,7 @@ impl AppContext {
             platform_detector: dependencies.platform_detector,
             desktop_backend: dependencies.desktop_backend,
             terminal_backend: dependencies.terminal_backend,
+            tmux_backend: dependencies.tmux_backend,
             container_backend: dependencies.container_backend,
             editor_backend: dependencies.editor_backend,
             emulator_backend: dependencies.emulator_backend,
@@ -162,7 +167,16 @@ impl AppContext {
         let integration_registry =
             IntegrationRegistry::from_platform(&detected_platform, &SystemPlatformProbe)?;
 
-        let process_runner: Arc<dyn ProcessRunner> = Arc::new(LocalProcessRunner);
+        let process_runner: Arc<dyn ProcessRunner> = Arc::new(TokioProcessRunner);
+        let tmux_executable = match &detected_platform.terminal {
+            TerminalCapability::Tmux { executable } => executable.clone(),
+            _ => PathBuf::from("tmux"),
+        };
+        let tmux_process_backend = Arc::new(TmuxProcessBackend::new(
+            Arc::clone(&process_runner),
+            tmux_executable,
+        )?);
+        let tmux_backend: Arc<dyn TmuxBackend> = tmux_process_backend.clone();
         let application_catalog: Arc<dyn ApplicationCatalog> =
             if detected_platform.operating_system.is_linux() {
                 Arc::new(LinuxApplicationCatalog::new())
@@ -187,6 +201,12 @@ impl AppContext {
                 Arc::clone(&zed),
                 Arc::clone(&desktop),
             )?;
+            crate::integrations::command::register_handlers(
+                &mut handlers,
+                Arc::clone(&process_runner),
+                Arc::clone(&tmux_backend),
+                Arc::clone(&file_system),
+            )?;
             (desktop, zed as Arc<dyn EditorBackend>, Arc::new(handlers))
         } else {
             (
@@ -196,6 +216,7 @@ impl AppContext {
             )
         };
 
+        let terminal_backend: Arc<dyn TerminalBackend> = tmux_process_backend;
         let context = Self::new(AppDependencies {
             config_store,
             state_store,
@@ -206,7 +227,8 @@ impl AppContext {
             clock: Arc::new(SystemClock),
             platform_detector: Arc::new(platform_detector),
             desktop_backend,
-            terminal_backend: Arc::new(UnavailableBackend::new("terminal backend")),
+            terminal_backend,
+            tmux_backend,
             container_backend: Arc::new(UnavailableBackend::new("container backend")),
             editor_backend,
             emulator_backend: Arc::new(UnavailableBackend::new("emulator backend")),
@@ -253,6 +275,10 @@ impl AppContext {
 
     pub fn terminal_backend(&self) -> &dyn TerminalBackend {
         self.terminal_backend.as_ref()
+    }
+
+    pub fn tmux_backend(&self) -> &dyn TmuxBackend {
+        self.tmux_backend.as_ref()
     }
 
     pub fn container_backend(&self) -> &dyn ContainerBackend {
@@ -484,6 +510,59 @@ impl DesktopBackend for UnavailableBackend {
 impl TerminalBackend for UnavailableBackend {
     fn is_available(&self) -> Result<bool> {
         Ok(false)
+    }
+}
+
+impl TmuxBackend for UnavailableBackend {
+    fn observe<'a>(
+        &'a self,
+    ) -> crate::application::ports::BoxFuture<
+        'a,
+        Result<Vec<crate::application::ports::TmuxSessionSnapshot>>,
+    > {
+        let error = self.error(ErrorCategory::Integration, "tmux observation");
+        Box::pin(async move { Err(error) })
+    }
+
+    fn create_session<'a>(
+        &'a self,
+        _session_name: &'a str,
+        _window: crate::application::ports::TmuxWindowRequest,
+    ) -> crate::application::ports::BoxFuture<
+        'a,
+        Result<crate::application::ports::TmuxSessionSnapshot>,
+    > {
+        let error = self.error(ErrorCategory::Integration, "tmux session creation");
+        Box::pin(async move { Err(error) })
+    }
+
+    fn create_window<'a>(
+        &'a self,
+        _session_name: &'a str,
+        _window: crate::application::ports::TmuxWindowRequest,
+    ) -> crate::application::ports::BoxFuture<
+        'a,
+        Result<crate::application::ports::TmuxSessionSnapshot>,
+    > {
+        let error = self.error(ErrorCategory::Integration, "tmux window creation");
+        Box::pin(async move { Err(error) })
+    }
+
+    fn kill_window<'a>(
+        &'a self,
+        _session_name: &'a str,
+        _window_identity: &'a str,
+    ) -> crate::application::ports::BoxFuture<'a, Result<()>> {
+        let error = self.error(ErrorCategory::Integration, "tmux window cleanup");
+        Box::pin(async move { Err(error) })
+    }
+
+    fn kill_session<'a>(
+        &'a self,
+        _session_name: &'a str,
+    ) -> crate::application::ports::BoxFuture<'a, Result<()>> {
+        let error = self.error(ErrorCategory::Integration, "tmux session cleanup");
+        Box::pin(async move { Err(error) })
     }
 }
 

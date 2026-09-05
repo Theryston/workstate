@@ -35,8 +35,8 @@ impl OwnershipStatus {
             (Unknown, _) | (_, Unknown) => Unknown,
             (PreExisting, _) | (_, PreExisting) => PreExisting,
             (CreatedByEnvironment, _) | (_, CreatedByEnvironment) => CreatedByEnvironment,
-            (ReusedExisting, _) | (_, ReusedExisting) => ReusedExisting,
-            (CreatedByCurrentRun, CreatedByCurrentRun) => CreatedByCurrentRun,
+            (CreatedByCurrentRun, _) | (_, CreatedByCurrentRun) => CreatedByCurrentRun,
+            _ => ReusedExisting,
         }
     }
 }
@@ -255,4 +255,21 @@ pub enum CleanupStatus {
     Failed {
         errors: Vec<String>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OwnershipStatus;
+
+    #[test]
+    fn a_reused_observation_does_not_remove_existing_environment_ownership() {
+        assert_eq!(
+            OwnershipStatus::CreatedByCurrentRun.merge(OwnershipStatus::ReusedExisting),
+            OwnershipStatus::CreatedByCurrentRun
+        );
+        assert_eq!(
+            OwnershipStatus::CreatedByEnvironment.merge(OwnershipStatus::ReusedExisting),
+            OwnershipStatus::CreatedByEnvironment
+        );
+    }
 }

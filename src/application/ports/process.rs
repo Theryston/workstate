@@ -1,4 +1,4 @@
-use std::{future::Future, path::PathBuf, pin::Pin};
+use std::{future::Future, path::PathBuf, pin::Pin, sync::Arc};
 
 use crate::error::{ErrorCategory, Result, WorkstateError};
 
@@ -41,6 +41,10 @@ pub struct ProcessOutputChunk {
     pub bytes: Vec<u8>,
 }
 
+pub trait ProcessOutputSink: Send + Sync {
+    fn emit<'a>(&'a self, chunk: ProcessOutputChunk) -> BoxFuture<'a, Result<()>>;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackgroundProcess {
     pub identity: String,
@@ -61,6 +65,33 @@ impl BackgroundProcess {
 
 pub trait ProcessRunner: Send + Sync {
     fn run<'a>(&'a self, request: ProcessRequest) -> BoxFuture<'a, Result<ProcessOutput>>;
+
+    fn run_with_output<'a>(
+        &'a self,
+        request: ProcessRequest,
+        output: Arc<dyn ProcessOutputSink>,
+    ) -> BoxFuture<'a, Result<ProcessOutput>> {
+        Box::pin(async move {
+            let result = self.run(request).await?;
+            if !result.stdout.is_empty() {
+                output
+                    .emit(ProcessOutputChunk {
+                        stream: ProcessStream::Stdout,
+                        bytes: result.stdout.clone(),
+                    })
+                    .await?;
+            }
+            if !result.stderr.is_empty() {
+                output
+                    .emit(ProcessOutputChunk {
+                        stream: ProcessStream::Stderr,
+                        bytes: result.stderr.clone(),
+                    })
+                    .await?;
+            }
+            Ok(result)
+        })
+    }
 
     fn start_background<'a>(
         &'a self,

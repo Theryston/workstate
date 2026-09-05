@@ -799,6 +799,7 @@ fn enrich_workspace_context(
     action: &mut ActionSpec,
     configuration: &crate::domain::EnvironmentConfig,
 ) {
+    action.resolved_environment = Some(configuration.slug.clone());
     let workspace_id = action
         .desktop_workspace
         .as_ref()

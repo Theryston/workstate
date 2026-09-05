@@ -5,7 +5,10 @@ use std::{
 
 use serde::{Deserialize, Deserializer, Serialize, de::Error as DeserializeError};
 
-use super::{DomainError, TilingPreference, WorkspaceId, WorkspaceTarget, validate_identifier};
+use super::{
+    DomainError, EnvironmentSlug, TilingPreference, WorkspaceId, WorkspaceTarget,
+    validate_identifier,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
@@ -153,7 +156,11 @@ impl CommandSpec {
         }
 
         if self.environment.iter().any(|(key, value)| {
-            key.is_empty() || key.contains('=') || key.contains('\0') || value.contains('\0')
+            key.is_empty()
+                || key.contains('=')
+                || key.chars().any(char::is_control)
+                || value.chars().any(char::is_control)
+                || value.contains('\0')
         }) {
             return Err(DomainError::InvalidCommand {
                 action_id: action_id.to_string(),
@@ -484,6 +491,8 @@ pub struct ActionSpec {
     pub resolved_workspace_target: Option<WorkspaceTarget>,
     #[serde(skip)]
     pub resolved_tiling: Option<TilingPreference>,
+    #[serde(skip)]
+    pub resolved_environment: Option<EnvironmentSlug>,
 }
 
 impl ActionSpec {
@@ -503,6 +512,7 @@ impl ActionSpec {
             cleanup_policy: CleanupPolicy::default(),
             resolved_workspace_target: None,
             resolved_tiling: None,
+            resolved_environment: None,
         })
     }
 

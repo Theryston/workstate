@@ -10,6 +10,7 @@ pub mod persistence;
 pub mod platform;
 pub mod process;
 pub mod terminal;
+pub mod tmux;
 
 pub use applications::{ApplicationCatalog, InstalledApplication};
 pub use clock::{Clock, SystemClock};
@@ -26,7 +27,8 @@ pub use filesystem::FileSystem;
 pub use persistence::{ConfigStore, StateStore};
 pub use platform::{PlatformDetector, PlatformProbe};
 pub use process::{
-    BackgroundProcess, BoxFuture, ProcessOutput, ProcessOutputChunk, ProcessRequest, ProcessRunner,
-    ProcessStream,
+    BackgroundProcess, BoxFuture, ProcessOutput, ProcessOutputChunk, ProcessOutputSink,
+    ProcessRequest, ProcessRunner, ProcessStream,
 };
 pub use terminal::TerminalBackend;
+pub use tmux::{TmuxBackend, TmuxSessionSnapshot, TmuxWindowRequest, TmuxWindowSnapshot};
