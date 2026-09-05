@@ -1,7 +1,7 @@
 pub mod backend;
 pub mod errors;
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeSet, path::Path, sync::Arc, time::Duration};
 
 use crate::{
     application::{
@@ -43,6 +43,7 @@ impl ZedProjectHandler {
     async fn observe_inner(
         &self,
         action: &ActionSpec,
+        previous_resources: &[ResourceRecord],
         cancellation: CancellationToken,
     ) -> Result<ActionObservation> {
         cancellation.check()?;
@@ -65,50 +66,42 @@ impl ZedProjectHandler {
             .with_context("project_path", project_path.display().to_string())
             .with_context("matches", matches.len().to_string()));
         }
-        let Some(window) = matches.into_iter().next() else {
-            return Ok(ActionObservation::requires_change());
+        let window = match matches.as_slice() {
+            [window] => (*window).clone(),
+            [] => {
+                let persisted_matches =
+                    matching_persisted_projects(&projects, &project_path, previous_resources);
+                match persisted_matches.as_slice() {
+                    [window] => (*window).clone(),
+                    [] => return Ok(ActionObservation::requires_change()),
+                    _ => {
+                        return Err(WorkstateError::new(
+                            ErrorCategory::Integration,
+                            "more than one Zed window owns the configured project identity",
+                        )
+                        .with_context("project_path", project_path.display().to_string())
+                        .with_context("matches", persisted_matches.len().to_string()));
+                    }
+                }
+            }
+            _ => {
+                return Err(WorkstateError::new(
+                    ErrorCategory::Integration,
+                    "more than one Zed window owns the configured project identity",
+                )
+                .with_context("project_path", project_path.display().to_string())
+                .with_context("matches", matches.len().to_string()));
+            }
         };
-        let Some(target) = self.target_for(action) else {
-            return Ok(
-                ActionObservation::already_correct().with_resources(vec![window_record(
-                    action,
-                    &window,
-                    OwnershipStatus::ReusedExisting,
-                    true,
-                )?]),
-            );
-        };
-        let snapshot = self.desktop.snapshot().await?;
-        let destination = observed_destination(&snapshot, &target)?;
-        let Some(destination) = destination.workspace else {
-            return Ok(
-                ActionObservation::requires_change().with_resources(vec![window_record(
-                    action,
-                    &window,
-                    OwnershipStatus::ReusedExisting,
-                    true,
-                )?]),
-            );
-        };
-        if window.workspace_identity.as_deref() == Some(destination.identity.as_str()) {
-            Ok(
-                ActionObservation::already_correct().with_resources(vec![window_record(
-                    action,
-                    &window,
-                    OwnershipStatus::ReusedExisting,
-                    true,
-                )?]),
-            )
-        } else {
-            Ok(
-                ActionObservation::requires_change().with_resources(vec![window_record(
-                    action,
-                    &window,
-                    OwnershipStatus::ReusedExisting,
-                    true,
-                )?]),
-            )
-        }
+        Ok(
+            ActionObservation::already_correct().with_resources(vec![window_record(
+                action,
+                &window,
+                OwnershipStatus::ReusedExisting,
+                true,
+                Some(&project_path),
+            )?]),
+        )
     }
 
     async fn observe_for_cleanup_inner(
@@ -169,11 +162,13 @@ impl ZedProjectHandler {
         } else {
             OwnershipStatus::ReusedExisting
         };
-        let mut record = window_record(action, &window, ownership, !outcome.owned)?;
-        record.integration_metadata.insert(
-            "project_path".to_owned(),
-            project_path.display().to_string(),
-        );
+        let mut record = window_record(
+            action,
+            &window,
+            ownership,
+            !outcome.owned,
+            Some(&project_path),
+        )?;
         let mut mutations = Vec::new();
         let mut changed =
             outcome.status == crate::application::ports::EditorOperationStatus::Launched;
@@ -398,6 +393,10 @@ impl ActionHandler for ZedProjectHandler {
             .collect()
     }
 
+    fn requires_workspace_target_for_observation(&self, _action: &ActionSpec) -> bool {
+        false
+    }
+
     fn validate(&self, action: &ActionSpec) -> Result<()> {
         if action.kind != ActionKind::OpenProject {
             return Err(WorkstateError::new(
@@ -426,7 +425,19 @@ impl ActionHandler for ZedProjectHandler {
         action: &'a ActionSpec,
         cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<ActionObservation>> {
-        Box::pin(async move { self.observe_inner(action, cancellation).await })
+        Box::pin(async move { self.observe_inner(action, &[], cancellation).await })
+    }
+
+    fn observe_with_resources<'a>(
+        &'a self,
+        action: &'a ActionSpec,
+        previous_resources: &'a [ResourceRecord],
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<ActionObservation>> {
+        Box::pin(async move {
+            self.observe_inner(action, previous_resources, cancellation)
+                .await
+        })
     }
 
     fn observe_for_cleanup<'a>(
@@ -479,11 +490,41 @@ pub fn register_handlers(
 
 fn matching_projects(
     windows: &[EditorWindowSnapshot],
-    project_path: &std::path::Path,
+    project_path: &Path,
 ) -> Vec<EditorWindowSnapshot> {
     windows
         .iter()
         .filter(|window| window.project_path.as_deref() == Some(project_path))
+        .cloned()
+        .collect()
+}
+
+fn matching_persisted_projects(
+    windows: &[EditorWindowSnapshot],
+    project_path: &Path,
+    previous_resources: &[ResourceRecord],
+) -> Vec<EditorWindowSnapshot> {
+    let project_key = project_path.display().to_string();
+    let identities = previous_resources
+        .iter()
+        .filter(|record| record.resource.kind == ResourceKind::DesktopWindow)
+        .filter(|record| {
+            record
+                .integration_metadata
+                .get("project_path")
+                .is_some_and(|value| value == &project_key)
+        })
+        .map(|record| record.resource.stable_identity.as_str())
+        .collect::<BTreeSet<_>>();
+    windows
+        .iter()
+        .filter(|window| identities.contains(window.identity.as_str()))
+        .filter(|window| {
+            window
+                .project_path
+                .as_deref()
+                .is_none_or(|observed| observed == project_path)
+        })
         .cloned()
         .collect()
 }
@@ -636,12 +677,19 @@ fn window_record(
     window: &EditorWindowSnapshot,
     ownership: OwnershipStatus,
     observed_before: bool,
+    project_path: Option<&Path>,
 ) -> Result<ResourceRecord> {
     let identity = ResourceIdentity::new(ResourceKind::DesktopWindow, window.identity.clone())
         .map_err(WorkstateError::from)?;
     let mut record = ResourceRecord::new(identity, ownership).with_action(action.id.clone());
     record.observed_before = observed_before;
     record.cleanup_policy = action.cleanup_policy;
+    if let Some(project_path) = project_path {
+        record.integration_metadata.insert(
+            "project_path".to_owned(),
+            project_path.display().to_string(),
+        );
+    }
     record
         .integration_metadata
         .insert("application".to_owned(), window.application.clone());

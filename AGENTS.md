@@ -469,6 +469,8 @@ The UI may show well-known integrations such as Zed, Docker, tmux, and Android E
 
 An environment may contain any number of actions with the same `ActionKind`. The action ID remains unique for graph and persistence purposes, while each handler derives a resource identity key from the action's typed configuration. For `Open Project with Zed`, the key is the resolved canonical project directory. Different project keys must be reconciled independently even when the scheduler runs those actions concurrently. Never use the action kind alone as the identity of an external resource.
 
+The resource identity key is separate from placement metadata. During reconciliation, an existing resource that matches its action-specific key is already correct even when it currently lives in a different desktop workspace. A workspace target controls placement when Workstate provisions or changes a resource; it must not make an existing keyed resource look missing or cause a repeated run to relocate it solely because a dynamic target resolves differently.
+
 ### 8.3 Working directory
 
 Every command-like or project-like action may specify its own `working_directory` or project path.
@@ -504,7 +506,7 @@ No workspace movement
 
 The actual desktop workspace identifier resolved during execution must be persisted in runtime state when it is needed for cleanup.
 
-A configured workspace ID is a virtual workspace binding shared by every action that references it. Resolve each referenced target once during run preparation, before action observation or execution, and anchor it to the concrete desktop workspace identifier returned by the initial snapshot. Every action that references the same workspace ID must use that same concrete identifier for the entire run, including dependent actions such as tiling. Distinct `next_empty` workspace bindings must reserve their selected identities in deterministic order. Handlers must never independently re-resolve `next_empty` after setup begins.
+A configured workspace ID is a virtual workspace binding shared by every action that references it. Resolve each referenced target once during run preparation, before action execution, and anchor it to the concrete desktop workspace identifier returned by the initial snapshot. When an active runtime state already contains a concrete workspace identity for a `next_empty` binding and that workspace still exists, reuse that identity before searching for a new empty workspace. Every action that references the same workspace ID must use the same concrete identifier for the entire run, including dependent actions such as tiling. Distinct `next_empty` workspace bindings must reserve their selected identities in deterministic order. Handlers must never independently re-resolve `next_empty` after setup begins.
 
 Different actions may target different desktop workspaces in the same environment. For example, Docker Desktop may remain on the current workspace, the desktop application and Android Emulator may share another workspace, and the API project may open in a third workspace.
 
@@ -535,11 +537,11 @@ An application action may:
 - open an application;
 - open a project folder in that application;
 - detect and reuse an existing matching window;
-- move the window to the configured desktop workspace;
+- move a newly provisioned window to the configured desktop workspace;
 - wait until the window is discoverable;
 - record the window identity and ownership.
 
-For Zed, the project folder is explicit. A matching existing Zed window should be reused when it represents the requested project. A new window opened by the environment must be recorded and may be closed by `stop` only when ownership rules allow it.
+For Zed, the project folder is explicit and is the action's reconciliation key. A matching existing Zed window should be reused when it represents the requested project, regardless of its current desktop workspace. Its workspace must not be included in the already-correct decision. When COSMIC does not expose project metadata for a window, observation may use the persisted canonical project key together with the persisted stable window identity, but only after verifying that the current window is a Zed window. A title-only match is never sufficient. A new window opened by the environment must be recorded, placed when it is provisioned, and may be closed by `stop` only when ownership rules allow it.
 
 The `Open application` inspector field is a resource selector, never a free-form text field. The editor receives its options from the injected `ApplicationCatalog` port for the detected platform. The initial Linux implementation discovers visible, launchable `.desktop` entries from the standard user, system, Flatpak, and Snap application directories. The persisted application value is the platform-native desktop-entry ID; the editor displays the friendly application name and keeps the ID as secondary detail. If discovery is unavailable or returns no applications, the editor must show an actionable error and must not accept an arbitrary application name.
 

@@ -108,6 +108,7 @@ Implement a deterministic resolver for the workspace target declared by an actio
 7. Store the resolved workspace identifier in runtime state so rollback and stop do not depend on a later name lookup.
 8. Treat each configured workspace ID as a virtual binding. Resolve that binding once during run preparation and reuse its concrete workspace identity for every referencing action, including dependent actions.
 9. Reserve identities selected for distinct next-empty bindings in deterministic configuration order. Never resolve next-empty independently after another action has changed workspace occupancy.
+10. When an active runtime state contains the concrete identity previously assigned to a `next_empty` binding and that workspace still exists, reuse it before searching for another empty workspace.
 
 ### 4. Implement per-workspace tiling
 
@@ -127,16 +128,17 @@ Implement a deterministic resolver for the workspace target declared by an actio
 4. If no safe match exists, launch Zed with the resolved path through the process port.
 5. Mark a launch as owned only after the process or window can be associated with the requested project.
 6. Poll the desktop and editor observation ports with a bounded timeout and cancellation support until the new window is visible.
-7. Move the owned or safely identified window to the resolved workspace.
-8. If a user manually moved a reused window after Workstate observed it, stop must not close it or move it back.
-9. Focus a window only when the action requests focus; opening an environment must not steal focus unnecessarily.
-10. Support any number of Zed project actions in one environment. Derive the action's identity key from its resolved project directory, never from `ActionKind` alone.
-11. If desktop observation does not expose project metadata, serialize the launch-and-observe handoff, refresh the pre-launch snapshot after acquiring the coordination, and correlate only windows that appeared during that handoff.
+7. Move a newly launched or otherwise newly provisioned window to the resolved workspace.
+8. If a matching Zed project window already exists anywhere on the desktop, classify the action as already correct from its project key alone; a different current workspace must not trigger a move or a duplicate launch.
+9. If a user manually moved a reused window after Workstate observed it, stop must not close it or move it back.
+10. Focus a window only when the action requests focus; opening an environment must not steal focus unnecessarily.
+11. Support any number of Zed project actions in one environment. Derive the action's identity key from its resolved project directory, never from `ActionKind` alone.
+12. If desktop observation does not expose project metadata, serialize the launch-and-observe handoff, refresh the pre-launch snapshot after acquiring the coordination, and correlate only windows that appeared during that handoff. On later runs, a persisted canonical project key may be matched to its persisted stable window identity after verifying that the current window is still a Zed window; a title-only match is never sufficient.
 
 ### 6. Integrate with reconciliation and rollback
 
 1. Make each desktop and editor action idempotent.
-2. On rerun, observe first and return unchanged or repaired outcomes instead of blindly launching duplicate Zed windows or toggling tiling.
+2. On rerun, observe each action's resource key independently from its workspace placement and return unchanged or repaired outcomes instead of blindly launching duplicate Zed windows or toggling tiling.
 3. Register inverse operations only for mutations performed by the current run.
 4. Preserve pre-existing windows and desktop settings.
 5. If a later action fails, roll back moves, launches, workspace creation, and tiling changes in reverse dependency order.

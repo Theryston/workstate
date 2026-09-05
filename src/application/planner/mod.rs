@@ -16,7 +16,8 @@ use crate::{
     },
     domain::{
         ActionGraph, ActionId, ActionKind, ActionSpec, EnvironmentConfig, MutationRecord,
-        ReadinessCheck, ResourceRecord, WorkspaceId, WorkspaceReference, WorkspaceTarget,
+        ReadinessCheck, ResourceKind, ResourceRecord, RuntimeState, WorkspaceId,
+        WorkspaceReference, WorkspaceTarget,
     },
     error::{ErrorCategory, Result, WorkstateError},
     integrations::IntegrationRegistry,
@@ -222,6 +223,19 @@ pub trait ActionHandler: Send + Sync {
 
     fn validate(&self, _action: &ActionSpec) -> Result<()> {
         Ok(())
+    }
+
+    fn requires_workspace_target_for_observation(&self, _action: &ActionSpec) -> bool {
+        true
+    }
+
+    fn observe_with_resources<'a>(
+        &'a self,
+        action: &'a ActionSpec,
+        _previous_resources: &'a [ResourceRecord],
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<ActionObservation>> {
+        self.observe(action, cancellation)
     }
 
     fn observe<'a>(
@@ -512,9 +526,74 @@ impl<'a> Planner<'a> {
         desktop: &dyn DesktopBackend,
         cancellation: CancellationToken,
     ) -> Result<()> {
+        self.resolve_workspace_targets_with_state(plan, configuration, desktop, cancellation, None)
+            .await
+    }
+
+    pub async fn resolve_workspace_targets_with_state(
+        &self,
+        plan: &mut ExecutionPlan,
+        configuration: &EnvironmentConfig,
+        desktop: &dyn DesktopBackend,
+        cancellation: CancellationToken,
+        previous_state: Option<&RuntimeState>,
+    ) -> Result<()> {
+        self.resolve_workspace_targets_internal(
+            plan,
+            configuration,
+            desktop,
+            cancellation,
+            previous_state,
+            WorkspaceResolutionPhase::Execution,
+        )
+        .await
+    }
+
+    pub async fn resolve_workspace_targets_for_observation_with_state(
+        &self,
+        plan: &mut ExecutionPlan,
+        configuration: &EnvironmentConfig,
+        desktop: &dyn DesktopBackend,
+        cancellation: CancellationToken,
+        previous_state: Option<&RuntimeState>,
+    ) -> Result<()> {
+        self.resolve_workspace_targets_internal(
+            plan,
+            configuration,
+            desktop,
+            cancellation,
+            previous_state,
+            WorkspaceResolutionPhase::Observation,
+        )
+        .await
+    }
+
+    async fn resolve_workspace_targets_internal(
+        &self,
+        plan: &mut ExecutionPlan,
+        configuration: &EnvironmentConfig,
+        desktop: &dyn DesktopBackend,
+        cancellation: CancellationToken,
+        previous_state: Option<&RuntimeState>,
+        phase: WorkspaceResolutionPhase,
+    ) -> Result<()> {
         let referenced_workspace_ids = plan
             .entries()
-            .filter(|entry| entry.classification == PlanClassification::Unknown)
+            .filter(|entry| match phase {
+                WorkspaceResolutionPhase::Observation => {
+                    entry.classification == PlanClassification::Unknown
+                        && self
+                            .handlers
+                            .handler_for(&entry.action.kind)
+                            .is_none_or(|handler| {
+                                handler.requires_workspace_target_for_observation(&entry.action)
+                            })
+                }
+                WorkspaceResolutionPhase::Execution => matches!(
+                    entry.classification,
+                    PlanClassification::Unknown | PlanClassification::RequiresChange
+                ),
+            })
             .filter_map(|entry| workspace_id_for_action(&entry.action).cloned())
             .collect::<BTreeSet<_>>();
         if referenced_workspace_ids.is_empty() {
@@ -536,12 +615,26 @@ impl<'a> Planner<'a> {
                     anchor_workspace_target(&workspace.target, resolution)?
                 }
                 WorkspaceTarget::NextEmpty => {
-                    let resolution = resolve_workspace_target_with_reservations(
-                        &snapshot,
-                        &workspace.target,
-                        &reserved_next_empty,
-                    )?;
-                    let anchored = anchor_workspace_target(&workspace.target, resolution)?;
+                    let persisted_target = match previous_state {
+                        Some(state) => persisted_workspace_target(
+                            &workspace.id,
+                            configuration,
+                            state,
+                            &snapshot,
+                        )?,
+                        None => None,
+                    };
+                    let anchored = match persisted_target {
+                        Some(target) => target,
+                        None => {
+                            let resolution = resolve_workspace_target_with_reservations(
+                                &snapshot,
+                                &workspace.target,
+                                &reserved_next_empty,
+                            )?;
+                            anchor_workspace_target(&workspace.target, resolution)?
+                        }
+                    };
                     if let WorkspaceTarget::Existing {
                         reference: WorkspaceReference::Identifier(identity),
                     } = &anchored
@@ -579,7 +672,7 @@ impl<'a> Planner<'a> {
         plan: &mut ExecutionPlan,
         cancellation: CancellationToken,
     ) -> Result<()> {
-        self.observe_with_timeout(plan, cancellation, Duration::from_secs(30))
+        self.observe_with_timeout_and_state(plan, cancellation, Duration::from_secs(30), None)
             .await
     }
 
@@ -589,6 +682,17 @@ impl<'a> Planner<'a> {
         cancellation: CancellationToken,
         default_timeout: Duration,
     ) -> Result<()> {
+        self.observe_with_timeout_and_state(plan, cancellation, default_timeout, None)
+            .await
+    }
+
+    pub async fn observe_with_timeout_and_state(
+        &self,
+        plan: &mut ExecutionPlan,
+        cancellation: CancellationToken,
+        default_timeout: Duration,
+        previous_state: Option<&RuntimeState>,
+    ) -> Result<()> {
         if default_timeout.is_zero() {
             return Err(WorkstateError::new(
                 ErrorCategory::Runtime,
@@ -596,6 +700,26 @@ impl<'a> Planner<'a> {
             ));
         }
         cancellation.check()?;
+        let previous_resources = previous_state
+            .map(|state| {
+                state
+                    .resources
+                    .iter()
+                    .filter_map(|record| {
+                        record
+                            .action_id
+                            .clone()
+                            .map(|action_id| (action_id, record.clone()))
+                    })
+                    .fold(
+                        BTreeMap::<ActionId, Vec<ResourceRecord>>::new(),
+                        |mut resources, (action_id, record)| {
+                            resources.entry(action_id).or_default().push(record);
+                            resources
+                        },
+                    )
+            })
+            .unwrap_or_default();
         let mut jobs = JoinSet::new();
         for entry in plan
             .entries()
@@ -606,11 +730,15 @@ impl<'a> Planner<'a> {
             };
             let action = entry.action.clone();
             let action_id = entry.action_id.clone();
+            let resources = previous_resources
+                .get(&action_id)
+                .cloned()
+                .unwrap_or_default();
             let token = cancellation.clone();
             let timeout = entry.timeout.unwrap_or(default_timeout);
             jobs.spawn(async move {
                 let observation = run_with_timeout(
-                    handler.observe(&action, token.clone()),
+                    handler.observe_with_resources(&action, &resources, token.clone()),
                     timeout,
                     token,
                     Some(&action_id),
@@ -706,6 +834,66 @@ fn anchor_workspace_target(
     Ok(WorkspaceTarget::Existing {
         reference: WorkspaceReference::Identifier(workspace.identity),
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkspaceResolutionPhase {
+    Observation,
+    Execution,
+}
+
+fn persisted_workspace_target(
+    workspace_id: &WorkspaceId,
+    configuration: &EnvironmentConfig,
+    state: &RuntimeState,
+    snapshot: &crate::application::ports::DesktopSnapshot,
+) -> Result<Option<WorkspaceTarget>> {
+    let action_ids = configuration
+        .actions
+        .iter()
+        .filter(|action| workspace_id_for_action(action) == Some(workspace_id))
+        .map(|action| action.id.clone())
+        .collect::<BTreeSet<_>>();
+    if action_ids.is_empty() {
+        return Ok(None);
+    }
+
+    let identities = state
+        .resources
+        .iter()
+        .filter(|record| {
+            record
+                .action_id
+                .as_ref()
+                .is_some_and(|action_id| action_ids.contains(action_id))
+        })
+        .filter_map(workspace_identity_from_record)
+        .filter(|identity| snapshot.workspace(identity).is_some())
+        .collect::<BTreeSet<_>>();
+
+    match identities.into_iter().collect::<Vec<_>>().as_slice() {
+        [] => Ok(None),
+        [identity] => Ok(Some(WorkspaceTarget::Existing {
+            reference: WorkspaceReference::Identifier((*identity).clone()),
+        })),
+        identities => Err(WorkstateError::new(
+            ErrorCategory::Persistence,
+            "the persisted desktop workspace binding is ambiguous",
+        )
+        .with_context("workspace_id", workspace_id.to_string())
+        .with_context("workspace_identities", identities.join(", "))),
+    }
+}
+
+fn workspace_identity_from_record(record: &ResourceRecord) -> Option<String> {
+    match record.resource.kind {
+        ResourceKind::DesktopWorkspace => Some(record.resource.stable_identity.clone()),
+        ResourceKind::DesktopWindow => record
+            .integration_metadata
+            .get("workspace_identity")
+            .cloned(),
+        _ => None,
+    }
 }
 
 pub(crate) async fn run_readiness_checks(
@@ -830,8 +1018,9 @@ mod tests {
             DesktopWorkspaceSnapshot,
         },
         domain::{
-            ActionKind, ActionParameters, ActionSpec, EnvironmentConfig, WorkspaceId,
-            WorkspaceReference, WorkspaceSpec, WorkspaceTarget,
+            ActionKind, ActionParameters, ActionSpec, EnvironmentConfig, ResourceIdentity,
+            ResourceKind, ResourceRecord, RuntimeState, WorkspaceId, WorkspaceReference,
+            WorkspaceSpec, WorkspaceTarget,
         },
         integrations::IntegrationRegistry,
     };
@@ -1082,6 +1271,126 @@ mod tests {
         assert!(
             plan.entries()
                 .all(|entry| entry.action.resolved_workspace_target == expected)
+        );
+    }
+
+    #[tokio::test]
+    async fn persisted_next_empty_workspace_is_reused_across_runs() {
+        let Some(mut configuration) = EnvironmentConfig::new("Personal Blog").ok() else {
+            return;
+        };
+        let Some(workspace) = WorkspaceSpec::new("shared", WorkspaceTarget::NextEmpty).ok() else {
+            return;
+        };
+        configuration.workspaces.push(workspace);
+        let Some(mut action) = ActionSpec::new("editor", ActionKind::OpenApplication).ok() else {
+            return;
+        };
+        action.parameters.application = Some("zed".to_owned());
+        action.desktop_workspace = WorkspaceId::new("shared").ok();
+        configuration.actions.push(action);
+
+        let mut handlers = ActionHandlerRegistry::new();
+        assert!(
+            handlers
+                .register(FakeHandler {
+                    key: "open_application",
+                    status: ObservationStatus::RequiresChange,
+                })
+                .is_ok()
+        );
+        let mut integrations = IntegrationRegistry::new();
+        assert!(
+            integrations
+                .set_capability_availability(
+                    crate::platform::CapabilityId::DesktopWindows,
+                    true,
+                    None,
+                )
+                .is_ok()
+        );
+        let planner = Planner::new(&integrations, &handlers);
+        let mut plan = match planner.build(&configuration) {
+            Ok(plan) => plan,
+            Err(_) => return,
+        };
+
+        let mut state = RuntimeState::new(configuration.slug.clone(), "run-1");
+        let Some(action_id) = crate::domain::ActionId::new("editor").ok() else {
+            return;
+        };
+        let Some(identity) = ResourceIdentity::new(ResourceKind::DesktopWindow, "zed-editor").ok()
+        else {
+            return;
+        };
+        let mut resource = ResourceRecord::new(
+            identity,
+            crate::domain::OwnershipStatus::CreatedByEnvironment,
+        )
+        .with_action(action_id);
+        resource.observed_before = false;
+        resource.integration_metadata.insert(
+            "workspace_identity".to_owned(),
+            "bound-workspace".to_owned(),
+        );
+        assert!(state.record_resource(resource).is_ok());
+
+        let desktop = StaticDesktop {
+            snapshot: DesktopSnapshot {
+                workspaces: vec![
+                    DesktopWorkspaceSnapshot {
+                        identity: "main".to_owned(),
+                        name: Some("Main".to_owned()),
+                        position: Some(0),
+                        focused: true,
+                        tiling_enabled: Some(false),
+                    },
+                    DesktopWorkspaceSnapshot {
+                        identity: "bound-workspace".to_owned(),
+                        name: Some("Bound".to_owned()),
+                        position: Some(1),
+                        focused: false,
+                        tiling_enabled: Some(true),
+                    },
+                    DesktopWorkspaceSnapshot {
+                        identity: "other-empty".to_owned(),
+                        name: Some("Other Empty".to_owned()),
+                        position: Some(2),
+                        focused: false,
+                        tiling_enabled: Some(false),
+                    },
+                ],
+                windows: vec![DesktopWindowSnapshot {
+                    identity: "terminal".to_owned(),
+                    application: Some("terminal".to_owned()),
+                    title: Some("Shell".to_owned()),
+                    project_path: None,
+                    workspace_identity: Some("main".to_owned()),
+                    focused: true,
+                }],
+            },
+        };
+
+        assert!(
+            planner
+                .resolve_workspace_targets_with_state(
+                    &mut plan,
+                    &configuration,
+                    &desktop,
+                    CancellationToken::new(),
+                    Some(&state),
+                )
+                .await
+                .is_ok()
+        );
+
+        assert_eq!(
+            plan.entries()
+                .next()
+                .and_then(|entry| entry.action.resolved_workspace_target.clone()),
+            Some(WorkspaceTarget::Existing {
+                reference: WorkspaceReference::Identifier("bound-workspace".to_owned()),
+            })
         );
     }
 

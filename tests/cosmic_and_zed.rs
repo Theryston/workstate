@@ -22,10 +22,12 @@ use workstate::{
             ProcessOutput, ProcessRequest, ProcessRunner, ensure_workspace,
             resolve_workspace_target,
         },
+        reconciliation::{InMemoryEventSink, ReconciliationEngine, RunRequest, SchedulerOptions},
     },
     domain::{
-        ActionKind, ActionSpec, OwnershipStatus, ResourceIdentity, ResourceKind, ResourceRecord,
-        TilingPreference, Timeout, WorkspaceId, WorkspaceReference, WorkspaceTarget,
+        ActionKind, ActionSpec, EnvironmentConfig, OwnershipStatus, ResourceIdentity, ResourceKind,
+        ResourceRecord, TilingPreference, Timeout, WorkspaceId, WorkspaceReference, WorkspaceSpec,
+        WorkspaceTarget,
     },
     error::{ErrorCategory, Result, WorkstateError},
     infrastructure::filesystem::local::LocalFileSystem,
@@ -889,6 +891,159 @@ async fn reused_zed_windows_are_not_moved_back_after_manual_relocation() -> Test
             .and_then(|item| item.workspace_identity.clone()),
         Some("main".to_owned())
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn zed_observation_matches_the_project_key_across_workspaces() -> TestResult {
+    let directory = tempdir()?;
+    let project_path = directory.path().to_path_buf();
+    let desktop = FakeDesktop::new(DesktopSnapshot {
+        workspaces: vec![
+            workspace("main", "Main", 0, true, true),
+            workspace("target", "Target", 1, false, false),
+        ],
+        windows: vec![DesktopWindowSnapshot {
+            identity: "zed-existing".to_owned(),
+            application: Some("dev.zed.Zed".to_owned()),
+            title: Some("Project".to_owned()),
+            project_path: Some(project_path.display().to_string()),
+            workspace_identity: Some("main".to_owned()),
+            focused: false,
+        }],
+    });
+    let editor = Arc::new(ZedBackend::new(
+        Arc::new(FixtureProcessRunner::for_cosmic(&[], &[])),
+        Arc::new(desktop.clone()),
+        Arc::new(LocalFileSystem),
+    ));
+    let handler = ZedProjectHandler::new(editor, Arc::new(desktop.clone()));
+    let mut action = ActionSpec::new("open-project", ActionKind::OpenProject)?;
+    action.parameters.application = Some("zed".to_owned());
+    action.parameters.project_path = Some(project_path.display().to_string());
+    action.desktop_workspace = Some(WorkspaceId::new("target")?);
+    action.resolved_workspace_target = Some(WorkspaceTarget::Existing {
+        reference: WorkspaceReference::Identifier("target".to_owned()),
+    });
+
+    let observation = handler.observe(&action, CancellationToken::new()).await?;
+
+    assert_eq!(observation.status, ObservationStatus::AlreadyCorrect);
+    assert_eq!(observation.resources.len(), 1);
+    assert!(desktop.calls()?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn reconciliation_observes_zed_before_resolving_next_empty() -> TestResult {
+    let directory = tempdir()?;
+    let project_path = directory.path().to_path_buf();
+    let desktop = FakeDesktop::new(DesktopSnapshot {
+        workspaces: vec![workspace("main", "Main", 0, true, true)],
+        windows: vec![DesktopWindowSnapshot {
+            identity: "zed-existing".to_owned(),
+            application: Some("dev.zed.Zed".to_owned()),
+            title: Some("Project".to_owned()),
+            project_path: Some(project_path.display().to_string()),
+            workspace_identity: Some("main".to_owned()),
+            focused: false,
+        }],
+    });
+    let editor = Arc::new(
+        ZedBackend::new(
+            Arc::new(FixtureProcessRunner::for_cosmic(&[], &[])),
+            Arc::new(desktop.clone()),
+            Arc::new(LocalFileSystem),
+        )
+        .with_command(ZedCommand::new("zed-test")),
+    );
+    let mut handlers = workstate::application::planner::ActionHandlerRegistry::new();
+    handlers.register(ZedProjectHandler::new(editor, Arc::new(desktop.clone())))?;
+
+    let mut integrations = workstate::integrations::IntegrationRegistry::new();
+    integrations.set_capability_availability(
+        workstate::platform::CapabilityId::DesktopWindows,
+        true,
+        None,
+    )?;
+    integrations.set_capability_availability(workstate::platform::CapabilityId::Zed, true, None)?;
+
+    let mut configuration = EnvironmentConfig::new("Repeated Zed")?;
+    configuration
+        .workspaces
+        .push(WorkspaceSpec::new("editor", WorkspaceTarget::NextEmpty)?);
+    let mut action = ActionSpec::new("open-project", ActionKind::OpenProject)?;
+    action.parameters.application = Some("zed".to_owned());
+    action.parameters.project_path = Some(project_path.display().to_string());
+    action.desktop_workspace = Some(WorkspaceId::new("editor")?);
+    configuration.actions.push(action);
+
+    let engine = ReconciliationEngine::with_clock_and_desktop(
+        &integrations,
+        Arc::new(handlers),
+        Arc::new(workstate::application::planner::NoopReadinessCheckRunner),
+        Arc::new(desktop),
+        Arc::new(workstate::application::ports::SystemClock),
+        SchedulerOptions::new(1, Duration::from_secs(1), Duration::from_secs(1))?,
+    );
+    let events = Arc::new(InMemoryEventSink::default());
+    let plan = engine
+        .prepare(
+            &configuration,
+            &RunRequest::new("run-1", false)?,
+            CancellationToken::new(),
+            events,
+        )
+        .await?;
+
+    assert_eq!(
+        plan.entries().next().map(|entry| entry.classification),
+        Some(workstate::application::planner::PlanClassification::AlreadyCorrect)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn zed_observation_reuses_persisted_identity_without_project_metadata() -> TestResult {
+    let directory = tempdir()?;
+    let project_path = directory.path().to_path_buf();
+    let desktop = FakeDesktop::new(DesktopSnapshot {
+        workspaces: vec![workspace("main", "Main", 0, true, true)],
+        windows: vec![DesktopWindowSnapshot {
+            identity: "zed-existing".to_owned(),
+            application: Some("dev.zed.Zed".to_owned()),
+            title: Some("Project".to_owned()),
+            project_path: None,
+            workspace_identity: Some("main".to_owned()),
+            focused: false,
+        }],
+    });
+    let runner = FixtureProcessRunner::for_cosmic(&[], &[]);
+    let editor = Arc::new(ZedBackend::new(
+        Arc::new(runner.clone()),
+        Arc::new(desktop.clone()),
+        Arc::new(LocalFileSystem),
+    ));
+    let handler = ZedProjectHandler::new(editor, Arc::new(desktop));
+    let mut action = ActionSpec::new("open-project", ActionKind::OpenProject)?;
+    action.parameters.application = Some("zed".to_owned());
+    action.parameters.project_path = Some(project_path.display().to_string());
+    let mut persisted = ResourceRecord::new(
+        ResourceIdentity::new(ResourceKind::DesktopWindow, "zed-existing")?,
+        OwnershipStatus::CreatedByEnvironment,
+    );
+    persisted.integration_metadata.insert(
+        "project_path".to_owned(),
+        project_path.display().to_string(),
+    );
+
+    let observation = handler
+        .observe_with_resources(&action, &[persisted], CancellationToken::new())
+        .await?;
+
+    assert_eq!(observation.status, ObservationStatus::AlreadyCorrect);
+    assert_eq!(observation.resources.len(), 1);
+    assert!(runner.calls()?.is_empty());
     Ok(())
 }
 

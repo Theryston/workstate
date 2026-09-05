@@ -125,11 +125,12 @@ impl<'a> LifecycleEngine<'a> {
         let existing = self.state_store.load(&configuration.slug)?;
         let plan = self
             .core
-            .prepare(
+            .prepare_with_runtime_state(
                 configuration,
                 &request,
                 cancellation.clone(),
                 events.clone(),
+                existing.as_ref(),
             )
             .await?;
         let ownership = OwnershipRegistry::load(

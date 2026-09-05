@@ -333,6 +333,18 @@ impl<'a> ReconciliationEngine<'a> {
         cancellation: CancellationToken,
         events: Arc<dyn EventSink>,
     ) -> Result<crate::application::planner::ExecutionPlan> {
+        self.prepare_with_runtime_state(configuration, request, cancellation, events, None)
+            .await
+    }
+
+    pub async fn prepare_with_runtime_state(
+        &self,
+        configuration: &EnvironmentConfig,
+        request: &RunRequest,
+        cancellation: CancellationToken,
+        events: Arc<dyn EventSink>,
+        previous_state: Option<&crate::domain::RuntimeState>,
+    ) -> Result<crate::application::planner::ExecutionPlan> {
         let environment = configuration.slug.clone();
         events
             .emit(ApplicationEvent::RunStarted {
@@ -352,11 +364,12 @@ impl<'a> ReconciliationEngine<'a> {
 
         if let Some(desktop_backend) = &self.desktop_backend
             && let Err(error) = planner
-                .resolve_workspace_targets(
+                .resolve_workspace_targets_for_observation_with_state(
                     &mut plan,
                     configuration,
                     desktop_backend.as_ref(),
                     cancellation.clone(),
+                    previous_state,
                 )
                 .await
         {
@@ -365,8 +378,28 @@ impl<'a> ReconciliationEngine<'a> {
         }
 
         if let Err(error) = planner
-            .observe_with_timeout(&mut plan, cancellation.clone(), self.observation_timeout)
+            .observe_with_timeout_and_state(
+                &mut plan,
+                cancellation.clone(),
+                self.observation_timeout,
+                previous_state,
+            )
             .await
+        {
+            self.emit_failure(&events, &environment, &error).await?;
+            return Err(error);
+        }
+
+        if let Some(desktop_backend) = &self.desktop_backend
+            && let Err(error) = planner
+                .resolve_workspace_targets_with_state(
+                    &mut plan,
+                    configuration,
+                    desktop_backend.as_ref(),
+                    cancellation.clone(),
+                    previous_state,
+                )
+                .await
         {
             self.emit_failure(&events, &environment, &error).await?;
             return Err(error);
