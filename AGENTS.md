@@ -1673,6 +1673,20 @@ Release automation is defined by `.github/workflows/release.yml` and `release-pl
 - the build must compile the exact tagged release commit before its artifacts are uploaded;
 - the workflow must keep the GitHub token scoped to repository contents and must not require a custom release secret for normal operation.
 
+## 23.2 Unix installer
+
+`unix.sh` is the distribution bootstrap installer for the published Workstate binary. It is not an environment definition format, a runtime dependency, or a migration path for the earlier shell scripts.
+
+- the installer must run only for Pop!_OS with an active COSMIC desktop session on Linux;
+- unsupported systems must fail before installing packages, downloading binaries, or changing user files;
+- missing `tmux` is installed through the Pop!_OS `apt` package manager after obtaining sudo authorization;
+- missing `cosmicmsg` is downloaded from `https://files.theryston.dev/cosmic/cosmicmsg`, installed as `/usr/local/bin/cosmicmsg`, and marked executable;
+- the Workstate archive is selected from the detected architecture using the `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu` target;
+- Workstate is installed to `${XDG_BIN_HOME:-$HOME/.local/bin}` without requiring root privileges;
+- the installer downloads and verifies `checksums-sha256.txt` before extracting the Workstate archive;
+- the installer may add the user-local binary directory to the detected shell profile, but must not modify project files or environment configuration;
+- all installer output and errors must remain in English and must provide an actionable next step.
+
 ## 24. Change workflow for coding agents
 
 Before editing:
