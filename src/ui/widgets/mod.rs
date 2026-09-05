@@ -784,9 +784,7 @@ fn render_path_input(
     completion: &super::editor::PathInputState,
     theme: Theme,
 ) {
-    let visible_suggestions = (completion.suggestions.len().min(8) as u16).max(1);
-    let height = 4 + visible_suggestions;
-    let area = centered_rect_with_height(78, height, frame.area());
+    let area = path_input_area(frame.area());
     frame.render_widget(Clear, area);
 
     let title = format!(
@@ -995,18 +993,8 @@ fn centered_rect(width_percent: u16, height_percent: u16, area: Rect) -> Rect {
         .split(vertical[1])[1]
 }
 
-fn centered_rect_with_height(width_percent: u16, height: u16, area: Rect) -> Rect {
-    if area.width == 0 || area.height == 0 {
-        return Rect::new(area.x, area.y, 0, 0);
-    }
-    let width = (area.width.saturating_mul(width_percent) / 100).clamp(1, area.width);
-    let height = height.clamp(1, area.height);
-    Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    )
+fn path_input_area(area: Rect) -> Rect {
+    centered_rect(78, 70, area)
 }
 
 #[cfg(test)]
@@ -1014,7 +1002,7 @@ mod tests {
     use std::time::Duration;
 
     use crossterm::event::KeyCode;
-    use ratatui::{Terminal, backend::TestBackend, layout::Position};
+    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Position};
 
     use crate::domain::{
         ActionKind, ActionSpec, EnvironmentConfig, EnvironmentName, EnvironmentSlug, ExecutionMode,
@@ -1168,6 +1156,64 @@ mod tests {
             terminal.get_cursor_position().ok(),
             Some(Position::new(22, 2))
         );
+    }
+
+    #[test]
+    fn path_input_panel_height_is_independent_of_suggestion_count() {
+        let short_input = TextInput {
+            field: EditorField::ProjectPath,
+            value: "~/".to_owned(),
+            cursor: 2,
+            replace_on_next_char: false,
+            path_completion: Some(PathInputState {
+                suggestions: vec![crate::application::ports::DirectorySuggestion {
+                    name: "Code".to_owned(),
+                    value: "~/Code".to_owned(),
+                }],
+                selected: Some(0),
+                validation_error: None,
+            }),
+        };
+        let long_input = TextInput {
+            path_completion: Some(PathInputState {
+                suggestions: (0..20)
+                    .map(|index| crate::application::ports::DirectorySuggestion {
+                        name: format!("Directory {index}"),
+                        value: format!("~/Directory{index}"),
+                    })
+                    .collect(),
+                selected: Some(0),
+                validation_error: None,
+            }),
+            ..short_input.clone()
+        };
+
+        let short_bottom_row = rendered_path_input_bottom_row(&short_input);
+        let long_bottom_row = rendered_path_input_bottom_row(&long_input);
+
+        assert_eq!(short_bottom_row, long_bottom_row);
+    }
+
+    fn rendered_path_input_bottom_row(input: &TextInput) -> Option<u16> {
+        let backend = TestBackend::new(80, 24);
+        let Ok(mut terminal) = Terminal::new(backend) else {
+            return None;
+        };
+        let result = terminal.draw(|frame| render_input(frame, input, Theme::new(false)));
+        let Ok(completed) = result else {
+            return None;
+        };
+        bottom_left_border_row(completed.buffer)
+    }
+
+    fn bottom_left_border_row(buffer: &Buffer) -> Option<u16> {
+        (0..buffer.area.height).find(|row| {
+            (0..buffer.area.width).any(|column| {
+                buffer
+                    .cell((column, *row))
+                    .is_some_and(|cell| cell.symbol() == "└")
+            })
+        })
     }
 
     #[test]
