@@ -36,7 +36,9 @@ pub enum EditorField {
     ProjectPath,
     CommandProgram,
     ContainerName,
+    ContainerImage,
     ComposeProjectName,
+    ComposeFiles,
     EmulatorAvd,
     ReadinessDelay,
 }
@@ -52,7 +54,9 @@ pub enum InspectorField {
     DesktopWorkspace,
     Tiling,
     ContainerName,
+    ContainerImage,
     ComposeProjectName,
+    ComposeFiles,
     EmulatorAvd,
     ReadinessDelay,
     Dependencies,
@@ -70,7 +74,9 @@ impl InspectorField {
             Self::DesktopWorkspace => "Desktop workspace",
             Self::Tiling => "Tiling",
             Self::ContainerName => "Container",
+            Self::ContainerImage => "Container image",
             Self::ComposeProjectName => "Compose project",
+            Self::ComposeFiles => "Compose files",
             Self::EmulatorAvd => "Android virtual device",
             Self::ReadinessDelay => "Readiness delay",
             Self::Dependencies => "Depends on",
@@ -389,11 +395,13 @@ impl EditorState {
             ActionKind::StartContainer => {
                 fields.extend([
                     InspectorField::ContainerName,
+                    InspectorField::ContainerImage,
                     InspectorField::WorkingDirectory,
                 ]);
             }
             ActionKind::StartCompose => fields.extend([
                 InspectorField::ComposeProjectName,
+                InspectorField::ComposeFiles,
                 InspectorField::WorkingDirectory,
             ]),
             ActionKind::StartAndroidEmulator => {
@@ -470,11 +478,24 @@ impl EditorState {
                 .as_ref()
                 .map(|container| container.name.clone())
                 .unwrap_or_else(|| "not set".to_owned()),
+            InspectorField::ContainerImage => action
+                .parameters
+                .container
+                .as_ref()
+                .and_then(|container| container.image.clone())
+                .unwrap_or_else(|| "not set".to_owned()),
             InspectorField::ComposeProjectName => action
                 .parameters
                 .compose
                 .as_ref()
                 .and_then(|compose| compose.project_name.clone())
+                .unwrap_or_else(|| "not set".to_owned()),
+            InspectorField::ComposeFiles => action
+                .parameters
+                .compose
+                .as_ref()
+                .map(|compose| compose.files.join(", "))
+                .filter(|files| !files.is_empty())
                 .unwrap_or_else(|| "not set".to_owned()),
             InspectorField::EmulatorAvd => action
                 .parameters
@@ -731,8 +752,39 @@ impl EditorState {
                 name: String::new(),
                 image: None,
                 command: None,
+                environment: Default::default(),
+                mounts: Vec::new(),
+                ports: Vec::new(),
             });
         container.name = name;
+        self.mark_dirty();
+        Ok(())
+    }
+
+    pub fn set_action_container_image(
+        &mut self,
+        action_id: &ActionId,
+        image: String,
+    ) -> Result<()> {
+        let action = self.action_mut(action_id)?;
+        if !matches!(&action.kind, ActionKind::StartContainer) {
+            return Err(WorkstateError::new(
+                ErrorCategory::Ui,
+                format!("container configuration is not available for action '{action_id}'"),
+            ));
+        }
+        let container = action
+            .parameters
+            .container
+            .get_or_insert_with(|| ContainerSpec {
+                name: String::new(),
+                image: None,
+                command: None,
+                environment: Default::default(),
+                mounts: Vec::new(),
+                ports: Vec::new(),
+            });
+        container.image = (!image.trim().is_empty()).then(|| image.trim().to_owned());
         self.mark_dirty();
         Ok(())
     }
@@ -760,6 +812,35 @@ impl EditorState {
                 down_command: None,
             });
         compose.project_name = Some(project_name);
+        self.mark_dirty();
+        Ok(())
+    }
+
+    pub fn set_action_compose_files(&mut self, action_id: &ActionId, value: String) -> Result<()> {
+        let action = self.action_mut(action_id)?;
+        if !matches!(&action.kind, ActionKind::StartCompose) {
+            return Err(WorkstateError::new(
+                ErrorCategory::Ui,
+                format!("Compose configuration is not available for action '{action_id}'"),
+            ));
+        }
+        let files = value
+            .split(',')
+            .map(str::trim)
+            .filter(|file| !file.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let compose = action
+            .parameters
+            .compose
+            .get_or_insert_with(|| ComposeSpec {
+                project_name: None,
+                files: Vec::new(),
+                services: Vec::new(),
+                up_command: None,
+                down_command: None,
+            });
+        compose.files = files;
         self.mark_dirty();
         Ok(())
     }
@@ -1082,7 +1163,9 @@ impl EditorState {
             ),
             InspectorField::Command => self.begin_input(EditorField::CommandProgram),
             InspectorField::ContainerName => self.begin_input(EditorField::ContainerName),
+            InspectorField::ContainerImage => self.begin_input(EditorField::ContainerImage),
             InspectorField::ComposeProjectName => self.begin_input(EditorField::ComposeProjectName),
+            InspectorField::ComposeFiles => self.begin_input(EditorField::ComposeFiles),
             InspectorField::EmulatorAvd => self.begin_input(EditorField::EmulatorAvd),
             InspectorField::ReadinessDelay => self.begin_input(EditorField::ReadinessDelay),
             InspectorField::DesktopWorkspace => self.open_workspace_choice_picker(field),
@@ -1624,11 +1707,21 @@ impl EditorState {
                 .map(|action| action.id.clone())
                 .ok_or_else(|| WorkstateError::new(ErrorCategory::Ui, "no action is selected"))
                 .and_then(|action_id| self.set_action_container_name(&action_id, value)),
+            EditorField::ContainerImage => self
+                .selected_action_spec()
+                .map(|action| action.id.clone())
+                .ok_or_else(|| WorkstateError::new(ErrorCategory::Ui, "no action is selected"))
+                .and_then(|action_id| self.set_action_container_image(&action_id, value)),
             EditorField::ComposeProjectName => self
                 .selected_action_spec()
                 .map(|action| action.id.clone())
                 .ok_or_else(|| WorkstateError::new(ErrorCategory::Ui, "no action is selected"))
                 .and_then(|action_id| self.set_action_compose_project_name(&action_id, value)),
+            EditorField::ComposeFiles => self
+                .selected_action_spec()
+                .map(|action| action.id.clone())
+                .ok_or_else(|| WorkstateError::new(ErrorCategory::Ui, "no action is selected"))
+                .and_then(|action_id| self.set_action_compose_files(&action_id, value)),
             EditorField::EmulatorAvd => self
                 .selected_action_spec()
                 .map(|action| action.id.clone())
@@ -1690,6 +1783,16 @@ impl EditorState {
                         .map(|container| container.name.clone())
                 })
                 .unwrap_or_default(),
+            EditorField::ContainerImage => self
+                .selected_action_spec()
+                .and_then(|action| {
+                    action
+                        .parameters
+                        .container
+                        .as_ref()
+                        .and_then(|container| container.image.clone())
+                })
+                .unwrap_or_default(),
             EditorField::ComposeProjectName => self
                 .selected_action_spec()
                 .and_then(|action| {
@@ -1698,6 +1801,16 @@ impl EditorState {
                         .compose
                         .as_ref()
                         .and_then(|compose| compose.project_name.clone())
+                })
+                .unwrap_or_default(),
+            EditorField::ComposeFiles => self
+                .selected_action_spec()
+                .and_then(|action| {
+                    action
+                        .parameters
+                        .compose
+                        .as_ref()
+                        .map(|compose| compose.files.join(", "))
                 })
                 .unwrap_or_default(),
             EditorField::EmulatorAvd => self
@@ -2244,7 +2357,9 @@ fn validation_field(error: &DomainError) -> Option<InspectorField> {
             "command" => Some(InspectorField::Command),
             "desktop_workspace" => Some(InspectorField::DesktopWorkspace),
             "container" | "container.name" => Some(InspectorField::ContainerName),
+            "container.image" => Some(InspectorField::ContainerImage),
             "compose" | "compose.project_name" => Some(InspectorField::ComposeProjectName),
+            "compose.files" => Some(InspectorField::ComposeFiles),
             "emulator" | "emulator.avd" => Some(InspectorField::EmulatorAvd),
             "readiness_checks" => Some(InspectorField::ReadinessDelay),
             _ => None,

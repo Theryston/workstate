@@ -103,7 +103,7 @@ pub fn capability_descriptors() -> Vec<CapabilityDescriptor> {
             id: CapabilityId::DockerCompose,
             display_name: "Docker Compose",
             description: "Start and inspect Docker Compose projects",
-            executable: Some("docker-compose"),
+            executable: Some("docker"),
         },
         CapabilityDescriptor {
             id: CapabilityId::Zed,

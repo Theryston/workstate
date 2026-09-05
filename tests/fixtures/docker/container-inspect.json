@@ -1,0 +1,34 @@
+{
+  "Id": "7f1d6c3a",
+  "Name": "/workstate-web",
+  "Config": {
+    "Image": "nginx:latest",
+    "Cmd": ["nginx", "-g", "daemon off;"],
+    "Env": ["APP_MODE=development"],
+    "WorkingDir": "/usr/share/nginx/html"
+  },
+  "State": {
+    "Status": "running",
+    "Running": true,
+    "ExitCode": 0,
+    "Health": {
+      "Status": "healthy"
+    }
+  },
+  "Mounts": [
+    {
+      "Source": "/home/user/site",
+      "Destination": "/usr/share/nginx/html",
+      "RW": false
+    }
+  ],
+  "NetworkSettings": {
+    "Ports": {
+      "80/tcp": [
+        {
+          "HostPort": "8080"
+        }
+      ]
+    }
+  }
+}

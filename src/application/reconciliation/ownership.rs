@@ -102,7 +102,7 @@ impl OwnershipRegistry {
         let ownership = if self.shared_resources.contains(&identity) {
             OwnershipStatus::Shared
         } else if let Some(previous) = current_state.resource(&identity) {
-            previous.ownership
+            previous.ownership.merge(record.ownership)
         } else if !self.uncertain_environments.is_empty()
             && record.ownership == OwnershipStatus::Unknown
         {

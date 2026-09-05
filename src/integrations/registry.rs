@@ -380,16 +380,26 @@ impl IntegrationRegistry {
                 continue;
             };
             let executable = descriptor.executable;
-            let path = executable
-                .map(|name| probe.executable(name))
-                .transpose()?
-                .flatten();
+            let path = if id == CapabilityId::DockerCompose {
+                probe
+                    .executable("docker")?
+                    .or(probe.executable("docker-compose")?)
+            } else {
+                executable
+                    .map(|name| probe.executable(name))
+                    .transpose()?
+                    .flatten()
+            };
             self.set_availability(
                 id,
                 path.is_some(),
                 path.map(|value| format!("available at {}", value.display()))
                     .or_else(|| {
-                        executable.map(|name| format!("executable '{name}' was not found"))
+                        if id == CapabilityId::DockerCompose {
+                            Some("Docker Compose executable was not found".to_owned())
+                        } else {
+                            executable.map(|name| format!("executable '{name}' was not found"))
+                        }
                     }),
             );
         }

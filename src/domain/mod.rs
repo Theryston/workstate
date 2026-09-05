@@ -9,8 +9,8 @@ pub mod workspace;
 
 pub use action::{
     ActionId, ActionKind, ActionParameters, ActionSpec, CleanupPolicy, CommandSpec, ComposeSpec,
-    ContainerSpec, CustomParameters, EmulatorSpec, ExecutionMode, ReadinessCheck, RetryPolicy,
-    Timeout,
+    ContainerMount, ContainerPort, ContainerSpec, CustomParameters, EmulatorSpec, ExecutionMode,
+    ReadinessCheck, RetryPolicy, Timeout,
 };
 pub use environment::{
     CURRENT_SCHEMA_VERSION, EnvironmentConfig, EnvironmentName, EnvironmentSlug,

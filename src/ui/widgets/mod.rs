@@ -967,7 +967,9 @@ fn field_label(field: super::editor::EditorField) -> &'static str {
         super::editor::EditorField::ProjectPath => "project path",
         super::editor::EditorField::CommandProgram => "command",
         super::editor::EditorField::ContainerName => "container name",
+        super::editor::EditorField::ContainerImage => "container image",
         super::editor::EditorField::ComposeProjectName => "Compose project name",
+        super::editor::EditorField::ComposeFiles => "Compose files",
         super::editor::EditorField::EmulatorAvd => "Android virtual device",
         super::editor::EditorField::ReadinessDelay => "readiness delay in milliseconds",
     }

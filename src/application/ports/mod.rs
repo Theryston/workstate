@@ -3,6 +3,7 @@ pub mod clock;
 pub mod containers;
 pub mod desktop;
 pub mod directories;
+pub mod docker;
 pub mod editor;
 pub mod emulator;
 pub mod filesystem;
@@ -21,6 +22,14 @@ pub use desktop::{
     ensure_workspace, resolve_workspace_target, resolve_workspace_target_with_reservations,
 };
 pub use directories::{DirectoryCatalog, DirectoryCompletion, DirectorySuggestion};
+pub use docker::{
+    DockerActionContext, DockerBackend, DockerCheckReport, DockerCleanupRequest,
+    DockerComposeObservation, DockerComposeRequest, DockerComposeServiceSnapshot,
+    DockerComposeSnapshot, DockerContainerObservation, DockerContainerRequest,
+    DockerContainerSnapshot, DockerContainerState, DockerEngineRequest, DockerEngineSnapshot,
+    DockerEnsureOutcome, DockerHealthState, DockerMountSnapshot, DockerOperationStatus,
+    DockerPortSnapshot,
+};
 pub use editor::{EditorBackend, EditorOpenOutcome, EditorOperationStatus, EditorWindowSnapshot};
 pub use emulator::EmulatorBackend;
 pub use filesystem::FileSystem;

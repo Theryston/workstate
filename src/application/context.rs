@@ -14,7 +14,7 @@ use crate::{
         emulator::EmulatorBackend,
         filesystem::FileSystem,
         persistence::{ConfigStore, StateStore},
-        platform::PlatformDetector,
+        platform::{PlatformDetector, PlatformProbe},
         process::{BoxFuture, ProcessOutput, ProcessRequest, ProcessRunner},
         terminal::TerminalBackend,
         tmux::TmuxBackend,
@@ -30,7 +30,9 @@ use crate::{
         persistence::{TomlConfigStore, TomlStateStore, WorkstatePaths},
         process::TokioProcessRunner,
     },
-    integrations::{CosmicBackend, IntegrationRegistry, TmuxProcessBackend, ZedBackend},
+    integrations::{
+        CosmicBackend, DockerProcessBackend, IntegrationRegistry, TmuxProcessBackend, ZedBackend,
+    },
     platform::{
         DesktopEnvironment, DetectedPlatform, Distribution, OperatingSystem, TerminalCapability,
     },
@@ -168,6 +170,20 @@ impl AppContext {
             IntegrationRegistry::from_platform(&detected_platform, &SystemPlatformProbe)?;
 
         let process_runner: Arc<dyn ProcessRunner> = Arc::new(TokioProcessRunner);
+        let platform_probe = SystemPlatformProbe;
+        let docker_program = platform_probe
+            .executable("docker")?
+            .unwrap_or_else(|| PathBuf::from("docker"));
+        let docker_desktop_program = platform_probe.executable("docker-desktop")?;
+        let docker_compose_program = platform_probe.executable("docker-compose")?;
+        let docker_process_backend = Arc::new(DockerProcessBackend::new(
+            Arc::clone(&process_runner),
+            Arc::clone(&file_system),
+            docker_program,
+            docker_desktop_program,
+            docker_compose_program,
+        )?);
+        let container_backend: Arc<dyn ContainerBackend> = docker_process_backend.clone();
         let tmux_executable = match &detected_platform.terminal {
             TerminalCapability::Tmux { executable } => executable.clone(),
             _ => PathBuf::from("tmux"),
@@ -207,6 +223,11 @@ impl AppContext {
                 Arc::clone(&tmux_backend),
                 Arc::clone(&file_system),
             )?;
+            crate::integrations::docker::register_handlers(
+                &mut handlers,
+                docker_process_backend.clone(),
+                Arc::clone(&file_system),
+            )?;
             (desktop, zed as Arc<dyn EditorBackend>, Arc::new(handlers))
         } else {
             (
@@ -229,7 +250,7 @@ impl AppContext {
             desktop_backend,
             terminal_backend,
             tmux_backend,
-            container_backend: Arc::new(UnavailableBackend::new("container backend")),
+            container_backend,
             editor_backend,
             emulator_backend: Arc::new(UnavailableBackend::new("emulator backend")),
             integration_registry: Arc::new(integration_registry),

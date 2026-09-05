@@ -174,6 +174,13 @@ impl CommandSpec {
             });
         }
 
+        if self.shell && !self.arguments.is_empty() {
+            return Err(DomainError::InvalidCommand {
+                action_id: action_id.to_string(),
+                message: "shell commands must not define argv arguments".to_owned(),
+            });
+        }
+
         if self
             .arguments
             .iter()
@@ -304,6 +311,12 @@ pub struct ContainerSpec {
     pub image: Option<String>,
     #[serde(default)]
     pub command: Option<CommandSpec>,
+    #[serde(default)]
+    pub environment: BTreeMap<String, String>,
+    #[serde(default)]
+    pub mounts: Vec<ContainerMount>,
+    #[serde(default)]
+    pub ports: Vec<ContainerPort>,
 }
 
 impl ContainerSpec {
@@ -328,8 +341,62 @@ impl ContainerSpec {
             command.validate_for(action_id)?;
         }
 
+        if self.environment.iter().any(|(key, value)| {
+            key.is_empty()
+                || key.contains('=')
+                || key.chars().any(char::is_control)
+                || value.chars().any(char::is_control)
+                || value.contains('\0')
+        }) {
+            return Err(DomainError::InvalidActionParameter {
+                action_id: action_id.to_string(),
+                parameter: "container.environment".to_owned(),
+            });
+        }
+
+        if self.mounts.iter().any(|mount| {
+            mount.source.is_empty()
+                || mount.target.is_empty()
+                || mount.source.chars().any(char::is_control)
+                || mount.target.chars().any(char::is_control)
+        }) {
+            return Err(DomainError::InvalidActionParameter {
+                action_id: action_id.to_string(),
+                parameter: "container.mounts".to_owned(),
+            });
+        }
+
+        if self.ports.iter().any(|port| {
+            port.host == 0
+                || port.container == 0
+                || port.protocol.is_empty()
+                || port.protocol.chars().any(char::is_control)
+                || !matches!(port.protocol.as_str(), "tcp" | "udp" | "sctp")
+        }) {
+            return Err(DomainError::InvalidActionParameter {
+                action_id: action_id.to_string(),
+                parameter: "container.ports".to_owned(),
+            });
+        }
+
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerMount {
+    pub source: String,
+    pub target: String,
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerPort {
+    pub host: u16,
+    pub container: u16,
+    #[serde(default = "default_container_port_protocol")]
+    pub protocol: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -362,7 +429,7 @@ impl ComposeSpec {
         if self
             .files
             .iter()
-            .any(|file| file.is_empty() || file.contains('\0'))
+            .any(|file| file.is_empty() || file.chars().any(char::is_control))
         {
             return Err(DomainError::InvalidActionParameter {
                 action_id: action_id.to_string(),
@@ -804,6 +871,10 @@ fn reject_execution_mode(action: &ActionSpec, action_id: &ActionId) -> Result<()
 
 fn default_max_attempts() -> u32 {
     1
+}
+
+fn default_container_port_protocol() -> String {
+    "tcp".to_owned()
 }
 
 #[cfg(test)]

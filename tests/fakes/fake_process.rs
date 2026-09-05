@@ -39,6 +39,14 @@ impl FakeProcessRunner {
             .map_err(|_| WorkstateError::new(ErrorCategory::Runtime, "fake process lock failed"))
     }
 
+    #[allow(dead_code)]
+    pub fn background_requests(&self) -> Result<Vec<ProcessRequest>> {
+        self.state
+            .lock()
+            .map(|state| state.background_requests.clone())
+            .map_err(|_| WorkstateError::new(ErrorCategory::Runtime, "fake process lock failed"))
+    }
+
     fn record_request(&self, request: ProcessRequest, background: bool) -> Result<ProcessOutput> {
         let mut state = self
             .state

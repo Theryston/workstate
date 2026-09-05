@@ -1,0 +1,18 @@
+[
+  {
+    "ID": "api-container-id",
+    "Name": "blog-api-1",
+    "Project": "blog",
+    "Service": "api",
+    "State": "running",
+    "Health": "healthy"
+  },
+  {
+    "ID": "db-container-id",
+    "Name": "blog-db-1",
+    "Project": "blog",
+    "Service": "db",
+    "State": "running",
+    "Health": "healthy"
+  }
+]
