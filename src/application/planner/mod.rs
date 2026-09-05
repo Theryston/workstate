@@ -225,6 +225,18 @@ pub trait ActionHandler: Send + Sync {
         Ok(())
     }
 
+    fn execution_timeout(
+        &self,
+        action: &ActionSpec,
+        default_timeout: Duration,
+    ) -> Option<Duration> {
+        action
+            .timeout
+            .as_ref()
+            .map(|timeout| Duration::from_millis(timeout.milliseconds))
+            .or(Some(default_timeout))
+    }
+
     fn requires_workspace_target_for_observation(&self, _action: &ActionSpec) -> bool {
         true
     }
@@ -672,8 +684,13 @@ impl<'a> Planner<'a> {
         plan: &mut ExecutionPlan,
         cancellation: CancellationToken,
     ) -> Result<()> {
-        self.observe_with_timeout_and_state(plan, cancellation, Duration::from_secs(30), None)
-            .await
+        self.observe_with_timeout_and_state(
+            plan,
+            cancellation,
+            crate::application::timeouts::DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
+            None,
+        )
+        .await
     }
 
     pub async fn observe_with_timeout(
@@ -795,7 +812,7 @@ impl<'a> Planner<'a> {
     }
 }
 
-fn enrich_workspace_context(
+pub(crate) fn enrich_workspace_context(
     action: &mut ActionSpec,
     configuration: &crate::domain::EnvironmentConfig,
 ) {
@@ -945,21 +962,40 @@ pub(crate) async fn run_with_timeout<F, T>(
 where
     F: std::future::Future<Output = Result<T>>,
 {
-    tokio::select! {
-        _ = cancellation.cancelled() => Err(cancellation_error(action_id, phase)),
-        result = tokio::time::timeout(timeout, future) => match result {
-            Ok(value) => value,
-            Err(_) => {
-                let mut error = WorkstateError::new(
-                    ErrorCategory::Runtime,
-                    format!("{phase} timed out"),
-                )
-                .with_context("timeout_milliseconds", timeout.as_millis().to_string());
-                if let Some(action_id) = action_id {
-                    error = error.with_context("action_id", action_id.to_string());
+    run_with_optional_timeout(future, Some(timeout), cancellation, action_id, phase).await
+}
+
+pub(crate) async fn run_with_optional_timeout<F, T>(
+    future: F,
+    timeout: Option<Duration>,
+    cancellation: CancellationToken,
+    action_id: Option<&ActionId>,
+    phase: &str,
+) -> Result<T>
+where
+    F: std::future::Future<Output = Result<T>>,
+{
+    match timeout {
+        Some(timeout) => tokio::select! {
+            _ = cancellation.cancelled() => Err(cancellation_error(action_id, phase)),
+            result = tokio::time::timeout(timeout, future) => match result {
+                Ok(value) => value,
+                Err(_) => {
+                    let mut error = WorkstateError::new(
+                        ErrorCategory::Runtime,
+                        format!("{phase} timed out"),
+                    )
+                    .with_context("timeout_milliseconds", timeout.as_millis().to_string());
+                    if let Some(action_id) = action_id {
+                        error = error.with_context("action_id", action_id.to_string());
+                    }
+                    Err(error)
                 }
-                Err(error)
-            }
+            },
+        },
+        None => tokio::select! {
+            _ = cancellation.cancelled() => Err(cancellation_error(action_id, phase)),
+            result = future => result,
         },
     }
 }

@@ -190,7 +190,7 @@ Use a bounded channel where practical. If the UI cannot consume events fast enou
 
 ### 9. Implement timeout and cancellation
 
-Wrap external waits and action lifetimes with Tokio timeouts. On timeout:
+Wrap external waits and action lifetimes with Tokio timeouts, using the shared `180-second` external-operation default unless the action or integration defines a more specific policy. On timeout:
 
 - produce an action-specific error;
 - stop dependent actions from starting;
@@ -251,4 +251,3 @@ Use fake handlers with controllable delays and outcomes. Verify concurrency thro
 - no ownership rollback implementation;
 - no live desktop or Docker operations;
 - no legacy support.
-

@@ -15,7 +15,7 @@ use fake_docker::{DockerCall, FakeDocker};
 use fake_process::FakeProcessRunner;
 use workstate::{
     application::{
-        planner::CancellationToken,
+        planner::{ActionHandler, CancellationToken},
         ports::{
             DockerActionContext, DockerBackend, DockerCleanupRequest, DockerComposeRequest,
             DockerComposeSnapshot, DockerContainerRequest, DockerEngineRequest,
@@ -23,7 +23,10 @@ use workstate::{
             ProcessOutput,
         },
     },
-    domain::{CleanupPolicy, ComposeSpec, ContainerSpec, EnvironmentSlug, OwnershipStatus},
+    domain::{
+        ActionKind, ActionSpec, CleanupPolicy, ComposeSpec, ContainerSpec, EnvironmentSlug,
+        OwnershipStatus, ResourceIdentity, ResourceKind, ResourceRecord, Timeout,
+    },
     error::ErrorCategory,
     infrastructure::filesystem::local::LocalFileSystem,
     integrations::docker::{
@@ -310,7 +313,7 @@ async fn process_backend_creates_and_starts_a_missing_container() -> TestResult 
 }
 
 #[tokio::test]
-async fn process_backend_reuses_a_healthy_compose_project() -> TestResult {
+async fn process_backend_runs_compose_up_for_a_healthy_project() -> TestResult {
     let runner = FakeProcessRunner::with_responses([
         ProcessOutput {
             status: Some(0),
@@ -327,7 +330,23 @@ async fn process_backend_reuses_a_healthy_compose_project() -> TestResult {
             stdout: include_bytes!("fixtures/docker/compose-ps.json").to_vec(),
             stderr: Vec::new(),
         },
+        ProcessOutput {
+            status: Some(0),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        },
+        ProcessOutput {
+            status: Some(0),
+            stdout: b"27.5.1\n".to_vec(),
+            stderr: Vec::new(),
+        },
+        ProcessOutput {
+            status: Some(0),
+            stdout: include_bytes!("fixtures/docker/compose-ps.json").to_vec(),
+            stderr: Vec::new(),
+        },
     ]);
+    let runner_view = runner.clone();
     let runner: Arc<dyn workstate::application::ports::ProcessRunner> = Arc::new(runner);
     let file_system: Arc<dyn FileSystem> = Arc::new(LocalFileSystem);
     let backend = DockerProcessBackend::new(
@@ -345,8 +364,14 @@ async fn process_backend_reuses_a_healthy_compose_project() -> TestResult {
         )
         .await?;
 
-    assert_eq!(outcome.status, DockerOperationStatus::Reused);
-    assert_eq!(outcome.resources.len(), 3);
+    assert_eq!(outcome.status, DockerOperationStatus::Repaired);
+    assert_eq!(outcome.resources.len(), 1);
+    assert!(
+        runner_view
+            .requests()?
+            .iter()
+            .any(|request| { request.arguments.iter().any(|argument| argument == "up") })
+    );
     Ok(())
 }
 
@@ -471,24 +496,8 @@ async fn process_backend_preserves_a_container_with_external_configuration_chang
 }
 
 #[tokio::test]
-async fn process_backend_uses_compose_down_only_for_fully_owned_projects() -> TestResult {
-    let runner = FakeProcessRunner::with_responses([
-        ProcessOutput {
-            status: Some(0),
-            stdout: b"27.5.1\n".to_vec(),
-            stderr: Vec::new(),
-        },
-        ProcessOutput {
-            status: Some(0),
-            stdout: include_bytes!("fixtures/docker/compose-ps.json").to_vec(),
-            stderr: Vec::new(),
-        },
-        ProcessOutput {
-            status: Some(0),
-            stdout: Vec::new(),
-            stderr: Vec::new(),
-        },
-    ]);
+async fn process_backend_uses_compose_down_without_service_identity_comparison() -> TestResult {
+    let runner = FakeProcessRunner::default();
     let runner_view = runner.clone();
     let runner: Arc<dyn workstate::application::ports::ProcessRunner> = Arc::new(runner);
     let file_system: Arc<dyn FileSystem> = Arc::new(LocalFileSystem);
@@ -518,16 +527,17 @@ async fn process_backend_uses_compose_down_only_for_fully_owned_projects() -> Te
             },
         ],
     };
-    let mut resources = vec![models::compose_record(
+    let project = models::compose_record(
         &request.context,
         &snapshot,
         OwnershipStatus::CreatedByCurrentRun,
-    )?];
-    resources.extend(models::compose_service_records(
-        &request.context,
-        &snapshot,
+    )?;
+    let rotated_service = ResourceRecord::new(
+        ResourceIdentity::new(ResourceKind::DockerContainer, "rotated-service-id")?,
         OwnershipStatus::CreatedByCurrentRun,
-    )?);
+    )
+    .with_action(request.context.action_id.clone());
+    let resources = vec![project, rotated_service];
 
     let outcome = backend
         .stop_owned(
@@ -542,11 +552,13 @@ async fn process_backend_uses_compose_down_only_for_fully_owned_projects() -> Te
         .await?;
 
     assert_eq!(outcome.status, DockerOperationStatus::Repaired);
+    let requests = runner_view.requests()?;
+    assert_eq!(requests.len(), 1);
     assert!(
-        runner_view
-            .requests()?
+        requests[0]
+            .arguments
             .iter()
-            .any(|request| { request.arguments.iter().any(|argument| argument == "down") })
+            .any(|argument| argument == "down")
     );
     Ok(())
 }
@@ -571,6 +583,43 @@ async fn healthy_compose_project_is_reused() -> TestResult {
             .resources
             .iter()
             .all(|resource| resource.ownership == OwnershipStatus::ReusedExisting)
+    );
+    Ok(())
+}
+
+#[test]
+fn docker_start_actions_do_not_inherit_the_scheduler_action_timeout() -> TestResult {
+    let docker: Arc<dyn workstate::application::ports::DockerBackend> =
+        Arc::new(FakeDocker::default());
+    let file_system: Arc<dyn FileSystem> = Arc::new(LocalFileSystem);
+    let handler = workstate::integrations::docker::DockerActionHandler::new(
+        "start_container",
+        docker,
+        file_system,
+    )?;
+    let action = ActionSpec::new("start-container", ActionKind::StartContainer)?;
+
+    assert_eq!(
+        handler.execution_timeout(&action, Duration::from_secs(30)),
+        None
+    );
+
+    let mut bounded_action = action;
+    bounded_action.timeout = Some(Timeout::new(60_000)?);
+    assert_eq!(
+        handler.execution_timeout(&bounded_action, Duration::from_secs(30)),
+        Some(Duration::from_secs(60))
+    );
+
+    let compose_handler = workstate::integrations::docker::DockerActionHandler::new(
+        "start_compose",
+        Arc::new(FakeDocker::default()),
+        Arc::new(LocalFileSystem),
+    )?;
+    let compose_action = ActionSpec::new("start-compose", ActionKind::StartCompose)?;
+    assert_eq!(
+        compose_handler.execution_timeout(&compose_action, Duration::from_secs(30)),
+        None
     );
     Ok(())
 }

@@ -89,7 +89,7 @@ The process runner is generic infrastructure. The tmux adapter is the only layer
 2. Capture stdout and stderr separately.
 3. Attach action id, environment id, process id when available, start time, exit status, and duration to runtime events.
 4. Stream output incrementally to the logging and event channel without blocking the scheduler.
-5. Apply timeouts only where the action policy requests one. External startup waits must have bounded defaults.
+5. Apply explicit action timeouts when configured; otherwise use the shared `180-second` external-operation default. External startup waits must remain bounded and cancellable.
 6. Kill only the process tree owned by the action when cancellation or rollback requires it.
 7. Drain output after termination so no final error or diagnostic is lost.
 8. Return a typed error for spawn failures, invalid working directories, timeout, cancellation, non-zero exit, and unavailable executable.

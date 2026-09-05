@@ -13,6 +13,7 @@ use crate::{
             EditorOperationStatus, EditorWindowSnapshot, FileSystem, ProcessRequest, ProcessRunner,
             SystemClock,
         },
+        timeouts::DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
     },
     error::Result,
     infrastructure::filesystem::PathResolver,
@@ -94,7 +95,7 @@ impl ZedBackend {
             launch_lock: Arc::new(tokio::sync::Mutex::new(())),
             command: ZedCommand::default(),
             poll_interval: Duration::from_millis(25),
-            poll_timeout: Duration::from_secs(5),
+            poll_timeout: DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
         }
     }
 

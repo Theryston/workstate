@@ -8,7 +8,8 @@ use crate::{
     application::{
         planner::{
             ActionExecutionResult, ActionHandlerRegistry, ActionObservation, CancellationToken,
-            ExecutionPlan, ObservationStatus, ReadinessCheckRunner, run_with_timeout,
+            ExecutionPlan, ObservationStatus, ReadinessCheckRunner, enrich_workspace_context,
+            run_with_timeout,
         },
         ports::{Clock, ConfigStore, DesktopBackend, StateStore},
         reconciliation::{
@@ -231,7 +232,11 @@ impl<'a> LifecycleEngine<'a> {
         let actions = configuration
             .actions
             .iter()
-            .map(|action| (action.id.clone(), action))
+            .map(|source_action| {
+                let mut action = source_action.clone();
+                enrich_workspace_context(&mut action, configuration);
+                (action.id.clone(), action)
+            })
             .collect::<BTreeMap<_, _>>();
         let mut resources_by_action = BTreeMap::<ActionId, Vec<ResourceRecord>>::new();
         let mut mutations_by_action = BTreeMap::<ActionId, usize>::new();

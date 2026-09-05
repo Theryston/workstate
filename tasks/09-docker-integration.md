@@ -4,7 +4,7 @@
 
 Implement Docker support for the first release, covering Docker Engine, Docker Desktop, Docker Compose, container checks, startup readiness, ownership, and safe cleanup.
 
-An environment must be able to express that a Docker resource is required before another action runs. For example, a Compose stack can become ready before a Zed project or one-shot command is started. Workstate must inspect the current Docker state first, repair only what is missing, and preserve resources that were not created by the environment.
+An environment must be able to express that a Docker resource is required before another action runs. For example, a Compose stack can become ready before a Zed project or one-shot command is started. Direct container actions are managed by Workstate at the container level. Compose actions are different: Docker Compose is the source of truth for the project and its services, so Workstate must delegate project reconciliation to the configured Compose `up` and `down` operations while retaining project-level ownership and sharing safety.
 
 ## Dependencies
 
@@ -104,6 +104,7 @@ Keep engine, desktop, and Compose mechanisms behind one integration-neutral Dock
 7. Wait for configured checks after starting.
 8. Treat a container that exits during readiness as a failure with its exit status and relevant log tail.
 9. Do not remove volumes or images during ordinary stop or rollback.
+10. Do not apply the scheduler's short default action timeout to container creation or startup. A missing explicit action timeout means that image pulls may run until Docker completes or cancellation is requested. Preserve bounded Docker Engine readiness and readiness-check timeouts.
 
 ### 4. Implement Docker Compose actions
 
@@ -111,13 +112,14 @@ Keep engine, desktop, and Compose mechanisms behind one integration-neutral Dock
 2. Resolve paths before execution; never use the caller's PWD implicitly.
 3. Use the generic command runner with a structured argv specification where possible.
 4. Identify the Compose project by the observed Compose project name and resolved working directory. The project name is runtime metadata, not user-editable configuration.
-5. Inspect the project before running up.
-6. Reuse an already healthy matching project without restarting it.
-7. Run the configured up operation only when required, then wait for service checks.
-8. Record project identity, service identities, and ownership of resources created during the operation.
-9. On stop, run the configured safe down operation only for a project owned by the environment.
+5. Ensure Docker Engine readiness before invoking Compose.
+6. Invoke the configured up operation on every run. Docker Compose decides whether services must be created, started, recreated, or left unchanged.
+7. Use a post-up project observation only to verify that the project became available and to evaluate configured readiness checks.
+8. Record the project identity and project-level ownership. Do not require individual service-container identities for normal Compose cleanup.
+9. On stop, invoke the configured safe down operation once for an owned project. Do not compare container IDs or remove Compose services individually.
 10. Avoid destructive flags by default. Data removal must never occur unless a future explicit product capability enables it.
-11. If an external user changes the project while it is active, stop must preserve resources that are no longer provably owned by Workstate.
+11. If the project is pre-existing, shared, or its ownership is ambiguous, preserve it and do not invoke down.
+12. Do not apply the scheduler's short default action timeout to Compose startup. A missing explicit action timeout means that image pulls may run until Docker Compose completes or cancellation is requested. Preserve bounded Docker Engine readiness and readiness-check timeouts.
 
 ### 5. Implement readiness checks
 
@@ -151,7 +153,7 @@ For every check:
 
 ### 7. Implement rollback and lifecycle cleanup
 
-1. On a later setup failure, stop containers and Compose services created by the current run in reverse dependency order.
+1. On a later setup failure, stop direct containers created by the current run and invoke the configured Compose cleanup operation for an owned project in reverse dependency order.
 2. Preserve pre-existing containers, projects, engine state, and Docker Desktop.
 3. If Workstate started Docker Desktop and no other active environment requires it, stop it only when the configured lifecycle policy permits.
 4. If another active environment uses the same Docker resource, leave it running.
@@ -171,19 +173,20 @@ Add unit and integration tests with a fake Docker port:
 6. A newly created container is owned and removed or stopped according to policy.
 7. A pre-existing container survives stop and rollback.
 8. Compose project identity includes the resolved working directory.
-9. A healthy Compose project is not restarted.
-10. A Compose failure rolls back only resources created by the current run.
+9. A healthy Compose project still receives the configured up operation, and Docker Compose remains responsible for deciding whether anything changes.
+10. A Compose failure rolls back through the configured Compose cleanup operation while preserving pre-existing or shared projects.
 11. Each readiness check succeeds, times out, and cancels deterministically.
 12. HTTP and TCP checks use bounded timeouts.
 13. Shared Docker resources are not stopped by one environment.
 14. Secrets are absent from emitted logs and error strings.
 15. No default test requires a running Docker daemon.
+16. Direct container creation and Compose startup are not interrupted by the scheduler's default action timeout, while an explicitly configured action timeout remains enforced.
 
 ## Acceptance criteria
 
 - Docker Engine, Docker Desktop, direct containers, and Compose are available through the same application-facing abstraction.
 - The environment can wait for Docker readiness before opening dependent tools.
-- Existing healthy resources are reused without blind restart.
+- Existing healthy direct containers are reused without blind restart; Compose projects delegate reconciliation to Docker Compose.
 - Docker failures stop the setup transaction and participate in reverse-order rollback.
 - Stop and delete are ownership-aware and do not remove unrelated data.
 - All paths and commands are explicit and independent from PWD.

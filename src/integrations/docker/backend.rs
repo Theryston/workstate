@@ -1,9 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
 
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -23,6 +18,7 @@ use crate::{
             DockerEnsureOutcome, DockerHealthState, DockerOperationStatus, FileSystem,
             ProcessOutput, ProcessRunner,
         },
+        timeouts::DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
     },
     domain::{
         ActionKind, ActionSpec, CommandSpec, ContainerSpec, OwnershipStatus, ReadinessCheck,
@@ -184,7 +180,7 @@ impl DockerProcessBackend {
             .ensure_ready(
                 DockerEngineRequest {
                     launch_desktop_when_needed: true,
-                    timeout: Duration::from_secs(30),
+                    timeout: DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
                     poll_interval: self.poll_interval,
                     action: request.context.clone(),
                 },
@@ -667,7 +663,7 @@ impl DockerProcessBackend {
             .ensure_ready(
                 DockerEngineRequest {
                     launch_desktop_when_needed: true,
-                    timeout: Duration::from_secs(30),
+                    timeout: DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
                     poll_interval: self.poll_interval,
                     action: request.context.clone(),
                 },
@@ -683,32 +679,6 @@ impl DockerProcessBackend {
         let (before_snapshot, project_ownership) = match before {
             DockerComposeObservation::Missing => (None, OwnershipStatus::CreatedByCurrentRun),
             DockerComposeObservation::Present(snapshot) => {
-                if snapshot.is_healthy(&request.specification.services) {
-                    resources.push(models::compose_record(
-                        &request.context,
-                        &snapshot,
-                        OwnershipStatus::ReusedExisting,
-                    )?);
-                    resources.extend(models::compose_service_records(
-                        &request.context,
-                        &snapshot,
-                        OwnershipStatus::ReusedExisting,
-                    )?);
-                    outputs.push(format!(
-                        "reused healthy Docker Compose project '{}'",
-                        snapshot.project_name
-                    ));
-                    let outcome = DockerEnsureOutcome {
-                        status: DockerOperationStatus::Reused,
-                        resources,
-                        detail: None,
-                        outputs,
-                    };
-                    if has_observable_readiness_checks(&request.readiness_checks) {
-                        self.check_compose_readiness(request, cancellation).await?;
-                    }
-                    return Ok(outcome);
-                }
                 (Some(snapshot), OwnershipStatus::ReusedExisting)
             }
             DockerComposeObservation::Unavailable(engine) => {
@@ -723,7 +693,7 @@ impl DockerProcessBackend {
             return Err(docker_error("start Compose project", &output));
         }
         outputs.push(format!(
-            "started Docker Compose project in '{}'",
+            "reconciled Docker Compose project in '{}'",
             request.working_directory.display()
         ));
         let after = match self
@@ -750,54 +720,6 @@ impl DockerProcessBackend {
             &after,
             project_ownership,
         )?);
-        let before_ids = before_snapshot
-            .as_ref()
-            .map(|snapshot| {
-                snapshot
-                    .services
-                    .iter()
-                    .filter_map(|service| service.container_id.clone())
-                    .collect::<BTreeSet<_>>()
-            })
-            .unwrap_or_default();
-        let before_service_states = before_snapshot
-            .as_ref()
-            .map(|snapshot| {
-                snapshot
-                    .services
-                    .iter()
-                    .filter_map(|service| {
-                        service
-                            .container_id
-                            .as_ref()
-                            .map(|id| (id.clone(), service.state.is_running()))
-                    })
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
-        for service in &after.services {
-            let (ownership, cleanup_operation) = match service.container_id.as_ref() {
-                Some(id) if !before_ids.contains(id) => (
-                    OwnershipStatus::CreatedByCurrentRun,
-                    Some(models::CONTAINER_CLEANUP_REMOVE),
-                ),
-                Some(id) if before_service_states.get(id) == Some(&false) => (
-                    OwnershipStatus::CreatedByCurrentRun,
-                    Some(models::CONTAINER_CLEANUP_STOP),
-                ),
-                _ => (OwnershipStatus::ReusedExisting, None),
-            };
-            resources.extend(models::compose_service_records_with_cleanup(
-                &request.context,
-                &DockerComposeSnapshot {
-                    project_name: after.project_name.clone(),
-                    working_directory: after.working_directory.clone(),
-                    services: vec![service.clone()],
-                },
-                ownership,
-                cleanup_operation,
-            )?);
-        }
         let outcome = DockerEnsureOutcome {
             status: if before_snapshot.is_some() {
                 DockerOperationStatus::Repaired
@@ -1305,150 +1227,34 @@ impl DockerProcessBackend {
         resources: &[ResourceRecord],
         cancellation: CancellationToken,
     ) -> Result<(Vec<String>, bool)> {
-        let owned_services = resources
-            .iter()
-            .filter(|resource| {
-                resource.resource.kind == ResourceKind::DockerContainer
-                    && resource.is_cleanup_candidate()
-                    && service_record_matches_working_directory(resource, request)
-            })
-            .collect::<Vec<_>>();
-        let observation = self
-            .compose
-            .observe(request.clone(), cancellation.clone())
-            .await?;
-        let snapshot = match observation {
-            crate::application::ports::DockerComposeObservation::Missing => {
-                return Ok((
-                    vec!["Docker Compose project was already absent".to_owned()],
-                    false,
-                ));
-            }
-            crate::application::ports::DockerComposeObservation::Present(snapshot) => snapshot,
-            crate::application::ports::DockerComposeObservation::Unavailable(engine) => {
-                return Err(engine_unavailable_after_mutation(&engine));
-            }
+        let Some(project) = resources.iter().find(|resource| {
+            resource.resource.kind == ResourceKind::DockerCompose && resource.is_cleanup_candidate()
+        }) else {
+            return Ok((Vec::new(), false));
         };
-        let project_identity =
-            models::compose_project_identity(&snapshot.project_name, &snapshot.working_directory);
-        let project_owned = resources.iter().any(|resource| {
-            resource.resource.kind == ResourceKind::DockerCompose
-                && resource.resource.stable_identity == project_identity
-                && resource.is_cleanup_candidate()
-        });
-        let current_ids = snapshot
-            .services
-            .iter()
-            .filter_map(|service| service.container_id.as_deref())
-            .collect::<BTreeSet<_>>();
-        let owned_ids = owned_services
-            .iter()
-            .map(|resource| resource.resource.stable_identity.as_str())
-            .collect::<BTreeSet<_>>();
-        let can_use_project_down = project_owned
-            && !current_ids.is_empty()
-            && current_ids.len() == snapshot.services.len()
-            && current_ids.iter().all(|id| owned_ids.contains(id))
-            && owned_ids.iter().all(|id| current_ids.contains(id))
-            && owned_services.iter().all(|resource| {
-                resource
-                    .integration_metadata
-                    .get(models::CONTAINER_CLEANUP_OPERATION)
-                    .is_none_or(|operation| operation == models::CONTAINER_CLEANUP_REMOVE)
+        let project_name = project
+            .integration_metadata
+            .get("project_name")
+            .cloned()
+            .unwrap_or_else(|| {
+                request
+                    .working_directory
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("compose-project")
+                    .to_owned()
             });
-        if can_use_project_down {
-            let output = self.compose.down(request, cancellation).await?;
-            if output.succeeded() || is_missing_project(&output) {
-                return Ok((
-                    vec![format!(
-                        "stopped owned Docker Compose project '{}'",
-                        snapshot.project_name
-                    )],
-                    false,
-                ));
-            }
-            return Err(docker_error("stop Compose project", &output));
-        }
-
-        let mut outputs = Vec::new();
-        let mut conflict_detected = project_owned;
-        if project_owned {
-            outputs.push(format!(
-                "preserved Docker Compose project '{}' because its ownership changed or could not be proven",
-                snapshot.project_name
+        let output = self.compose.down(request, cancellation).await?;
+        if output.succeeded() || is_missing_project(&output) {
+            return Ok((
+                vec![format!(
+                    "stopped owned Docker Compose project '{project_name}'"
+                )],
+                false,
             ));
         }
-        for resource in owned_services {
-            cancellation.check()?;
-            let service_matches = snapshot.services.iter().any(|service| {
-                service.container_id.as_deref() == Some(resource.resource.stable_identity.as_str())
-                    && resource
-                        .integration_metadata
-                        .get("compose_project")
-                        .is_some_and(|project| project == &snapshot.project_name)
-                    && resource
-                        .integration_metadata
-                        .get("service_name")
-                        .is_some_and(|name| name == &service.name)
-            });
-            if !service_matches {
-                outputs.push(format!(
-                    "preserved Compose service resource '{}' because its current identity changed",
-                    resource.resource.stable_identity
-                ));
-                conflict_detected = true;
-                continue;
-            }
-            let cleanup_operation = resource
-                .integration_metadata
-                .get(models::CONTAINER_CLEANUP_OPERATION)
-                .map(String::as_str)
-                .unwrap_or(models::CONTAINER_CLEANUP_REMOVE);
-            let service = snapshot.services.iter().find(|service| {
-                service.container_id.as_deref() == Some(resource.resource.stable_identity.as_str())
-            });
-            if cleanup_operation == models::CONTAINER_CLEANUP_STOP
-                && service.is_some_and(|service| !service.state.is_running())
-            {
-                outputs.push(format!(
-                    "Compose service '{}' was already stopped",
-                    resource.resource.stable_identity
-                ));
-                continue;
-            }
-            let should_stop = cleanup_operation == models::CONTAINER_CLEANUP_STOP;
-            let arguments = if should_stop {
-                vec!["stop".to_owned(), resource.resource.stable_identity.clone()]
-            } else {
-                vec![
-                    "rm".to_owned(),
-                    "--force".to_owned(),
-                    resource.resource.stable_identity.clone(),
-                ]
-            };
-            let output = self.engine.run(arguments, None).await?;
-            let already_absent = is_missing_container(&output);
-            let already_stopped = should_stop && is_already_stopped(&output);
-            if !output.succeeded() && !already_absent && !already_stopped {
-                return Err(if should_stop {
-                    docker_error("stop owned Compose service", &output)
-                } else {
-                    docker_error("remove owned Compose service", &output)
-                });
-            }
-            if should_stop {
-                outputs.push(format!(
-                    "stopped Compose service '{}' started by Workstate",
-                    resource.resource.stable_identity
-                ));
-            } else {
-                outputs.push(format!(
-                    "removed owned Compose service resource '{}'",
-                    resource.resource.stable_identity
-                ));
-            }
-        }
-        Ok((outputs, conflict_detected))
+        Err(docker_error("stop Compose project", &output))
     }
 }
 
@@ -1833,41 +1639,9 @@ impl DockerActionHandler {
                 }
             }
             ActionKind::StartCompose => {
-                let request = self.compose_request(action)?;
-                match self
-                    .docker
-                    .observe_compose(request.clone(), cancellation)
-                    .await?
-                {
-                    DockerComposeObservation::Missing => Ok(ActionObservation::requires_change()
-                        .with_detail("the Docker Compose project is missing")),
-                    DockerComposeObservation::Unavailable(engine) => {
-                        Ok(ActionObservation::requires_change().with_detail(
-                            engine
-                                .detail
-                                .unwrap_or_else(|| "Docker Engine is unavailable".to_owned()),
-                        ))
-                    }
-                    DockerComposeObservation::Present(snapshot) => {
-                        let mut resources = vec![models::compose_record(
-                            &request.context,
-                            &snapshot,
-                            OwnershipStatus::ReusedExisting,
-                        )?];
-                        resources.extend(models::compose_service_records(
-                            &request.context,
-                            &snapshot,
-                            OwnershipStatus::ReusedExisting,
-                        )?);
-                        if snapshot.is_healthy(&request.specification.services)
-                            && !has_observable_readiness(action)
-                        {
-                            Ok(ActionObservation::already_correct().with_resources(resources))
-                        } else {
-                            Ok(ActionObservation::requires_change().with_resources(resources))
-                        }
-                    }
-                }
+                let _ = self.compose_request(action)?;
+                Ok(ActionObservation::requires_change()
+                    .with_detail("Docker Compose will reconcile the project"))
             }
             _ => Err(WorkstateError::new(
                 ErrorCategory::Integration,
@@ -1890,6 +1664,17 @@ impl ActionHandler for DockerActionHandler {
                 .collect(),
             _ => std::collections::BTreeSet::new(),
         }
+    }
+
+    fn execution_timeout(
+        &self,
+        action: &ActionSpec,
+        _default_timeout: Duration,
+    ) -> Option<Duration> {
+        action
+            .timeout
+            .as_ref()
+            .map(|timeout| Duration::from_millis(timeout.milliseconds))
     }
 
     fn validate(&self, action: &ActionSpec) -> Result<()> {
@@ -1977,66 +1762,16 @@ impl ActionHandler for DockerActionHandler {
 
     fn observe_for_cleanup<'a>(
         &'a self,
-        action: &'a ActionSpec,
+        _action: &'a ActionSpec,
         resources: &'a [ResourceRecord],
         cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<ActionObservation>> {
         Box::pin(async move {
+            cancellation.check()?;
             if resources.is_empty() {
                 return Ok(ActionObservation::already_correct());
             }
-            match action.kind {
-                ActionKind::StartContainer => {
-                    match self
-                        .docker
-                        .observe_container(self.container_request(action)?, cancellation)
-                        .await?
-                    {
-                        DockerContainerObservation::Missing => {
-                            Ok(ActionObservation::already_correct())
-                        }
-                        DockerContainerObservation::Present(_) => {
-                            Ok(ActionObservation::already_correct()
-                                .with_resources(resources.to_vec()))
-                        }
-                        DockerContainerObservation::Unavailable(engine) => {
-                            Ok(ActionObservation::unknown(
-                                engine
-                                    .detail
-                                    .unwrap_or_else(|| "Docker Engine is unavailable".to_owned()),
-                            )
-                            .with_resources(resources.to_vec()))
-                        }
-                    }
-                }
-                ActionKind::StartCompose => {
-                    match self
-                        .docker
-                        .observe_compose(self.compose_request(action)?, cancellation)
-                        .await?
-                    {
-                        crate::application::ports::DockerComposeObservation::Missing => {
-                            Ok(ActionObservation::already_correct())
-                        }
-                        crate::application::ports::DockerComposeObservation::Present(_) => {
-                            Ok(ActionObservation::already_correct()
-                                .with_resources(resources.to_vec()))
-                        }
-                        crate::application::ports::DockerComposeObservation::Unavailable(
-                            engine,
-                        ) => Ok(ActionObservation::unknown(
-                            engine
-                                .detail
-                                .unwrap_or_else(|| "Docker Engine is unavailable".to_owned()),
-                        )
-                        .with_resources(resources.to_vec())),
-                    }
-                }
-                _ => Err(WorkstateError::new(
-                    ErrorCategory::Integration,
-                    "Docker cleanup received an incompatible action",
-                )),
-            }
+            Ok(ActionObservation::already_correct().with_resources(resources.to_vec()))
         })
     }
 
@@ -2334,20 +2069,6 @@ fn cleanup_lock_key(request: &DockerCleanupRequest) -> String {
         return format!("container:{}", specification.name);
     }
     format!("cleanup:{}", request.context.action_id)
-}
-
-fn service_record_matches_working_directory(
-    resource: &ResourceRecord,
-    request: &DockerComposeRequest,
-) -> bool {
-    resource
-        .integration_metadata
-        .get("compose_project")
-        .is_some_and(|project| !project.is_empty())
-        && resource
-            .integration_metadata
-            .get("compose_working_directory")
-            .is_some_and(|directory| directory == &request.working_directory.display().to_string())
 }
 
 fn is_missing_container(output: &ProcessOutput) -> bool {

@@ -247,6 +247,37 @@ impl ActionHandler for RecordingHandler {
         self.run_once(action, cancellation)
     }
 
+    fn observe_for_cleanup<'a>(
+        &'a self,
+        action: &'a ActionSpec,
+        _resources: &'a [ResourceRecord],
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<ActionObservation>> {
+        let state = Arc::clone(&self.state);
+        Box::pin(async move {
+            cancellation.check()?;
+            if action.resolved_environment.is_none() {
+                return Err(WorkstateError::new(
+                    ErrorCategory::Runtime,
+                    "cleanup action is missing its environment context",
+                ));
+            }
+            let action_name = Self::action_name(action);
+            let state = state
+                .lock()
+                .map_err(|_| WorkstateError::new(ErrorCategory::Runtime, "handler lock failed"))?;
+            if state.started.contains(&action_name) {
+                let resources = state
+                    .observed_resources
+                    .get(&action_name)
+                    .cloned()
+                    .unwrap_or_else(|| Self::resource(&action.id).into_iter().collect());
+                return Ok(ActionObservation::requires_change().with_resources(resources));
+            }
+            Ok(ActionObservation::requires_change())
+        })
+    }
+
     fn compensate<'a>(
         &'a self,
         action: &'a ActionSpec,

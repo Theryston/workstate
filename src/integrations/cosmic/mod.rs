@@ -14,6 +14,7 @@ use crate::{
             BoxFuture, DesktopBackend, DesktopOperationStatus, DesktopSnapshot,
             DesktopWorkspaceResolution, ensure_workspace, resolve_workspace_target,
         },
+        timeouts::DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
     },
     domain::{
         ActionKind, ActionSpec, CompensationOperation, MutationRecord, OwnershipStatus,
@@ -455,5 +456,5 @@ fn action_timeout(action: &ActionSpec) -> Duration {
         .timeout
         .as_ref()
         .map(|timeout| Duration::from_millis(timeout.milliseconds))
-        .unwrap_or_else(|| Duration::from_secs(5))
+        .unwrap_or(DEFAULT_EXTERNAL_OPERATION_TIMEOUT)
 }

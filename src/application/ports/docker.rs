@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use crate::{
-    application::planner::CancellationToken,
+    application::{planner::CancellationToken, timeouts::DEFAULT_EXTERNAL_OPERATION_TIMEOUT},
     domain::{
         ActionId, CleanupPolicy, CommandSpec, ComposeSpec, ContainerSpec, EnvironmentSlug,
         ReadinessCheck, ResourceRecord,
@@ -67,7 +67,7 @@ impl DockerEngineRequest {
     pub fn for_action(action: DockerActionContext) -> Self {
         Self {
             launch_desktop_when_needed: true,
-            timeout: Duration::from_secs(30),
+            timeout: DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
             poll_interval: Duration::from_millis(100),
             action,
         }

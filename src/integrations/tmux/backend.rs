@@ -5,12 +5,13 @@ use crate::{
         BoxFuture, ProcessOutput, ProcessRequest, ProcessRunner, TerminalBackend, TmuxBackend,
         TmuxSessionSnapshot, TmuxWindowRequest, TmuxWindowSnapshot,
     },
+    application::timeouts::DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
     error::{ErrorCategory, Result, WorkstateError},
 };
 
 use super::{errors, models};
 
-const TMUX_READY_TIMEOUT: Duration = Duration::from_secs(5);
+const TMUX_READY_TIMEOUT: Duration = DEFAULT_EXTERNAL_OPERATION_TIMEOUT;
 const TMUX_READY_POLL: Duration = Duration::from_millis(20);
 
 #[derive(Clone)]

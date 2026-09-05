@@ -713,6 +713,10 @@ Exit
 
 If everything is already correct, the execution should finish without restarting, closing, or recreating resources.
 
+Docker Compose is the explicit orchestration exception. For `Start Docker Compose stack`, Workstate must not reconcile individual service containers or compare persisted container IDs with the current Compose output. The Compose project is the managed resource, and Docker Compose is the source of truth for its service state. Workstate validates the request, ensures the Docker Engine is ready, invokes `docker compose up --detach` or the configured equivalent on every run, uses a post-up observation only for verification and readiness, and invokes one `docker compose down` during cleanup when the project-level ownership record permits it. Runtime state must retain the Compose project identity and ownership; service-container records are not required for Compose cleanup.
+
+Docker image pulls are another explicit timeout exception during action execution. Direct container creation and Compose startup may wait for a large image download, so the scheduler's short default action timeout must not abort those operations. Docker action handlers run without an outer action timeout by default, while remaining cancellation-aware and still honoring an explicit timeout configured on the action. Docker Engine readiness and readiness checks retain their own bounded timeouts.
+
 ### 9.2 Transactional setup
 
 Setup is transactional from the user's perspective.
@@ -831,6 +835,8 @@ When an environment requires Docker:
 
 External Docker startup may take much longer than the internal `200 ms` performance target. The performance target applies to internal overhead, planning, detection, and dispatch, not the unavoidable readiness time of an external service.
 
+Container creation and Compose startup must not use the scheduler's short default action timeout because Docker may need to pull a large image. Their execution timeout is unbounded by default, remains cancellable, and becomes bounded only when the environment explicitly configures an action timeout. Engine readiness and readiness checks remain independently bounded.
+
 ### 11.2 Existing containers
 
 For configured existing containers:
@@ -850,11 +856,15 @@ For each Compose project:
 - use the configured start command;
 - prefer structured process execution, with explicit shell mode when the user configured a shell command;
 - optionally wait for all services to be healthy or running;
-- record the stack identity and ownership;
-- use the configured stop behavior during cleanup;
+- treat the Compose project, not its individual containers, as the Workstate resource;
+- invoke the configured `up` operation on every environment run so Docker Compose performs its own reconciliation;
+- use a post-up Compose observation only to verify startup and evaluate readiness checks;
+- record the stack identity and project-level ownership;
+- invoke the configured `down` operation once during cleanup when the project-level ownership record allows cleanup;
+- do not require persisted service-container identities to prove that project-level cleanup is safe;
 - preserve the stack when another active environment uses the same Compose directory or stack.
 
-Do not assume that stopping a Compose project is always safe. Shared-resource detection is required.
+Do not compare or individually remove Compose service containers during normal cleanup. Docker Compose owns that orchestration. Shared-resource detection and project-level ownership are still required before invoking `down`.
 
 ## 12. COSMIC behavior
 
@@ -1246,7 +1256,7 @@ Never concatenate untrusted values into shell source. When a shell is intentiona
 
 ### 17.3 Timeouts and cancellation
 
-Every external wait must have an explicit timeout or a documented bounded default. Use Tokio cancellation and task coordination instead of detached untracked tasks.
+Every external wait must have an explicit timeout or a documented default. The shared default for external action execution, observation, lifecycle cleanup, desktop/editor startup verification, and terminal readiness is `180 seconds`; per-action configuration may provide a shorter explicit timeout. Docker image pulls and Compose image reconciliation are the documented exception to a bounded action-execution default because their duration depends on image size and network speed. They remain cancellation-aware, while engine readiness and readiness checks remain bounded. Use Tokio cancellation and task coordination instead of detached untracked tasks.
 
 Long-running external operations must emit progress events. The main process may wait for setup readiness but must never require the user to keep the TUI open after setup has completed.
 

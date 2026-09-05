@@ -127,7 +127,7 @@ Implement a deterministic resolver for the workspace target declared by an actio
 3. Reuse a matching window only when the adapter can establish a stable project identity. A title-only match is insufficient.
 4. If no safe match exists, launch Zed with the resolved path through the process port.
 5. Mark a launch as owned only after the process or window can be associated with the requested project.
-6. Poll the desktop and editor observation ports with a bounded timeout and cancellation support until the new window is visible.
+6. Poll the desktop and editor observation ports with the shared `180-second` external-operation timeout and cancellation support until the new window is visible.
 7. Move a newly launched or otherwise newly provisioned window to the resolved workspace.
 8. If a matching Zed project window already exists anywhere on the desktop, classify the action as already correct from its project key alone; a different current workspace must not trigger a move or a duplicate launch.
 9. If a user manually moved a reused window after Workstate observed it, stop must not close it or move it back.

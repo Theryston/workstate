@@ -11,10 +11,12 @@ use crate::{
         planner::{
             ActionExecutionResult, ActionHandler, ActionHandlerRegistry, ActionOutput,
             ActionOutputSink, CancellationToken, ExecutionPlan, PlanClassification,
-            ReadinessCheckRunner, cancellation_error, is_cancellation_error, run_with_timeout,
+            ReadinessCheckRunner, cancellation_error, is_cancellation_error,
+            run_with_optional_timeout,
         },
         ports::{Clock, SystemClock},
         reconciliation::{ApplicationEvent, EventSink, ExecutionObserver},
+        timeouts::DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
     },
     domain::{ActionId, ActionSpec},
     error::{ErrorCategory, Result, WorkstateError},
@@ -84,8 +86,8 @@ impl Default for SchedulerOptions {
             .unwrap_or(1);
         Self {
             max_concurrency,
-            default_action_timeout: Duration::from_secs(30),
-            default_readiness_timeout: Duration::from_secs(30),
+            default_action_timeout: DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
+            default_readiness_timeout: DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
         }
     }
 }
@@ -231,8 +233,8 @@ impl Scheduler {
                         let action = entry.action.clone();
                         let token = cancellation.clone();
                         let runner = Arc::clone(&self.readiness_runner);
-                        let action_timeout =
-                            entry.timeout.unwrap_or(self.options.default_action_timeout);
+                        let action_timeout = handler
+                            .execution_timeout(&entry.action, self.options.default_action_timeout);
                         let readiness_timeout = self.options.default_readiness_timeout;
                         let options = entry.retry_policy.clone();
                         let action_events = Arc::clone(&events);
@@ -619,7 +621,7 @@ struct ActionTaskResult {
 struct ActionExecutionContext {
     readiness_runner: Arc<dyn ReadinessCheckRunner>,
     cancellation: CancellationToken,
-    action_timeout: Duration,
+    action_timeout: Option<Duration>,
     default_readiness_timeout: Duration,
     retry_policy: crate::domain::RetryPolicy,
     events: Arc<dyn EventSink>,
@@ -647,7 +649,7 @@ async fn execute_action(
             .cancellation
             .check()
             .map_err(|_| cancellation_error(Some(&action.id), "action execution"))?;
-        let result = run_with_timeout(
+        let result = run_with_optional_timeout(
             execute_attempt(
                 Arc::clone(&handler),
                 &action,
