@@ -931,6 +931,8 @@ fn action_label(action: &ActionSpec) -> String {
     match &action.kind {
         ActionKind::OpenApplication => "Open application".to_owned(),
         ActionKind::OpenProject => "Open Project with Zed".to_owned(),
+        ActionKind::OpenProjectWithVsCode => "Open Project with VS Code".to_owned(),
+        ActionKind::OpenProjectWithCursor => "Open Project with Cursor".to_owned(),
         ActionKind::RunCommand => "Run command".to_owned(),
         ActionKind::ConfigureTiling => "Configure tiling".to_owned(),
         ActionKind::StartContainer => "Start Docker container".to_owned(),

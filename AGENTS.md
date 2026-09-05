@@ -36,6 +36,8 @@ The first release must include all capabilities defined by the current product s
 - COSMIC tiling enablement and restoration;
 - tmux sessions and windows;
 - Zed project windows;
+- VS Code project windows;
+- Cursor project windows;
 - Docker Desktop;
 - Docker Engine;
 - Docker Compose projects;
@@ -155,11 +157,11 @@ A declarative node in the environment graph. An action describes what must be en
 
 ### Resource
 
-The real object represented or created by an action, such as a Docker container, a Compose stack, a Zed window, an emulator, a desktop workspace, a tmux session, or a tmux window.
+The real object represented or created by an action, such as a Docker container, a Compose stack, a Zed, VS Code, or Cursor window, an emulator, a desktop workspace, a tmux session, or a tmux window.
 
 ### Backend
 
-An implementation of a capability contract. Examples include the COSMIC desktop backend, the tmux terminal backend, the Docker backend, the Zed backend, and the Android Emulator backend.
+An implementation of a capability contract. Examples include the COSMIC desktop backend, the tmux terminal backend, the Docker backend, the project-editor backend for Zed, VS Code, and Cursor, and the Android Emulator backend.
 
 ### Integration
 
@@ -291,7 +293,7 @@ When the environment argument is omitted, `stop` opens the same reusable environ
 - stop the environment's tmux session when it owns that session;
 - stop owned background processes through the terminal backend;
 - stop an Android Emulator only when this environment started it;
-- close Zed windows only when this environment opened them and no other active environment owns or uses them;
+- close Zed, VS Code, and Cursor windows only when this environment opened them and no other active environment owns or uses them;
 - stop only containers and Compose stacks initiated by this environment and not shared by other active environments;
 - stop Docker Desktop only when it was started by the environment and no other Docker-enabled environment still requires it;
 - restore configuration changes made by the environment, including the previous tiling state;
@@ -412,7 +414,7 @@ The compatibility registry must allow a future backend to add a new support prof
 
 Base platform compatibility and optional tool availability are separate checks.
 
-For a compatible Pop!_OS + COSMIC + tmux system, an environment may still require tools such as Docker, `docker compose`, Zed, `adb`, or the Android Emulator. Missing required tools must produce a targeted error before the dependent action starts. Do not fail the whole environment because an optional integration is not configured when the environment does not use it.
+For a compatible Pop!_OS + COSMIC + tmux system, an environment may still require tools such as Docker, `docker compose`, Zed, VS Code, Cursor, `adb`, or the Android Emulator. Missing required tools must produce a targeted error before the dependent action starts. Do not fail the whole environment because an optional integration is not configured when the environment does not use it.
 
 ## 8. Environment composition model
 
@@ -453,6 +455,8 @@ The initial action vocabulary should be capability-oriented:
 ```text
 Open application
 Open Project with Zed
+Open Project with VS Code
+Open Project with Cursor
 Run command
 Enable desktop tiling
 Start Docker container
@@ -462,9 +466,9 @@ Create background terminal window
 Custom integration action
 ```
 
-The UI may show well-known integrations such as Zed, Docker, tmux, and Android Emulator when those capabilities are available. The core model must not make tmux the only possible representation of a background process, and it must not require every future integration to modify the core scheduler.
+The UI may show well-known integrations such as Zed, VS Code, Cursor, Docker, tmux, and Android Emulator when those capabilities are available. The core model must not make tmux the only possible representation of a background process, and it must not require every future integration to modify the core scheduler.
 
-An environment may contain any number of actions with the same `ActionKind`. The action ID remains unique for graph and persistence purposes, while each handler derives a resource identity key from the action's typed configuration. For `Open Project with Zed`, the key is the resolved canonical project directory. Different project keys must be reconciled independently even when the scheduler runs those actions concurrently. Never use the action kind alone as the identity of an external resource.
+An environment may contain any number of actions with the same `ActionKind`. The action ID remains unique for graph and persistence purposes, while each handler derives a resource identity key from the action's typed configuration. For `Open Project with Zed`, `Open Project with VS Code`, and `Open Project with Cursor`, the key is the resolved canonical project directory within the selected editor profile. Different project keys and editor profiles must be reconciled independently even when the scheduler runs those actions concurrently. Never use the action kind alone as the identity of an external resource.
 
 The resource identity key is separate from placement metadata. During reconciliation, an existing resource that matches its action-specific key is already correct even when it currently lives in a different desktop workspace. A workspace target controls placement when Workstate provisions or changes a resource; it must not make an existing keyed resource look missing or cause a repeated run to relocate it solely because a dynamic target resolves differently.
 
@@ -540,7 +544,7 @@ An application action may:
 - wait until the window is discoverable;
 - record the window identity and ownership.
 
-For Zed, the project folder is explicit and is the action's reconciliation key. A matching existing Zed window should be reused when it represents the requested project, regardless of its current desktop workspace. Its workspace must not be included in the already-correct decision. When COSMIC does not expose project metadata for a window, observation may use the persisted canonical project key together with the persisted stable window identity, but only after verifying that the current window is a Zed window. A title-only match is never sufficient. A new window opened by the environment must be recorded, placed when it is provisioned, and may be closed by `stop` only when ownership rules allow it.
+For Zed, VS Code, and Cursor, the project folder is explicit and is the action's reconciliation key within that editor profile. A matching existing editor window should be reused when it represents the requested project, regardless of its current desktop workspace. Its workspace must not be included in the already-correct decision. When COSMIC does not expose project metadata for a window, observation may use the persisted canonical project key together with the persisted stable window identity, but only after verifying that the current window belongs to the expected editor profile. A title-only match is never sufficient. A new window opened by the environment must be recorded, placed when it is provisioned, and may be closed by `stop` only when ownership rules allow it. The three project-editor actions must share one implementation path parameterized by editor profile, launch executable, new-window flag, application identifiers, and capability requirements.
 
 The `Open application` inspector field is a resource selector, never a free-form text field. The editor receives its options from the injected `ApplicationCatalog` port for the detected platform. The initial Linux implementation discovers visible, launchable `.desktop` entries from the standard user, system, Flatpak, and Snap application directories. The persisted application value is the platform-native desktop-entry ID; the editor displays the friendly application name and keeps the ID as secondary detail. If discovery is unavailable or returns no applications, the editor must show an actionable error and must not accept an arbitrary application name.
 
@@ -769,8 +773,8 @@ Examples:
 - If Docker Desktop was already active, the environment may use it but must not stop it during rollback or `stop`.
 - If a container was already running, the environment may wait for it but must not stop it.
 - If a Compose stack was started by another active environment, preserve it.
-- If a Zed window existed before the run, preserve it.
-- If the environment opened a new Zed window, it may close it only if another active environment does not depend on that same window.
+- If a project-editor window existed before the run, preserve it.
+- If the environment opened a new project-editor window, it may close it only if another active environment does not depend on that same window.
 - If tiling was disabled before the run and the environment enabled it, restore it to disabled.
 - If an environment created its tmux session, it owns that session. If an identical session pre-existed and was reused, it must not be killed automatically.
 
@@ -882,11 +886,13 @@ The backend may use `cosmicmsg` and its JSON output, but all command execution m
 
 The backend must preserve the previous tiling value in runtime state. `stop` and rollback restore the previous value instead of assuming that tiling should always be disabled.
 
-## 13. Zed behavior
+## 13. Project editor behavior
 
-The Zed backend must support:
+The project-editor backend must support the `Open Project with Zed`, `Open Project with VS Code`, and `Open Project with Cursor` actions through one shared implementation parameterized by an editor profile. Each profile defines its launch executable, new-window flag, capability, and accepted COSMIC application identifiers.
 
-- checking whether Zed is available;
+Each profile must support:
+
+- checking whether its editor is available;
 - opening a configured project directory;
 - finding an existing matching project window;
 - waiting for a new window to become discoverable;
@@ -894,9 +900,9 @@ The Zed backend must support:
 - recording window identity and ownership;
 - closing only windows opened by the environment and not needed by another active environment.
 
-Project matching must use stable or sufficiently specific signals. Do not close every Zed window, and do not identify a project solely by a broad substring when a stronger identity is available.
+Project matching must use stable or sufficiently specific signals. Do not close every window for an editor, and do not identify a project solely by a broad substring when a stronger identity is available.
 
-Multiple `Open Project with Zed` actions are supported. When desktop observation does not expose project metadata, the Zed backend must serialize the launch-and-observe handoff, take a fresh pre-launch snapshot after acquiring that coordination, and correlate the newly observed window against that snapshot. A different Zed project launched by another action must not make the current project appear ambiguous. Multiple windows that genuinely match the same project key remain ambiguous unless a stronger stable identity resolves them.
+Multiple project-editor actions are supported. When desktop observation does not expose project metadata, the backend must serialize the launch-and-observe handoff, take a fresh pre-launch snapshot after acquiring that coordination, and correlate the newly observed window against that snapshot. A different project launched by another action must not make the current project appear ambiguous. Multiple windows that genuinely match the same editor-and-project key remain ambiguous unless a stronger stable identity resolves them.
 
 ## 14. Android Emulator behavior
 
@@ -1136,7 +1142,7 @@ It must not contain business logic, backend calls, configuration parsing details
 
 #### `ui/`
 
-`ui/` owns the Ratatui event loop, screens, widgets, keyboard handling, form state, graph editor state, and progress rendering. UI state must be convertible to validated domain commands or configuration values. The UI must not execute Docker, tmux, COSMIC, Zed, or emulator calls directly.
+`ui/` owns the Ratatui event loop, screens, widgets, keyboard handling, form state, graph editor state, and progress rendering. UI state must be convertible to validated domain commands or configuration values. The UI must not execute Docker, tmux, COSMIC, Zed, VS Code, Cursor, or emulator calls directly.
 
 #### `domain/`
 
@@ -1153,7 +1159,7 @@ It must not contain business logic, backend calls, configuration parsing details
 - runtime state transitions;
 - domain errors.
 
-The domain must not know about the filesystem, processes, Tokio, tmux, COSMIC, Docker, Zed, Android, or terminal rendering.
+The domain must not know about the filesystem, processes, Tokio, tmux, COSMIC, Docker, Zed, VS Code, Cursor, Android, or terminal rendering.
 
 #### `application/`
 
@@ -1312,6 +1318,10 @@ Open application          action name, application, arguments, working directory
                            desktop workspace, dependencies
 Open Project with Zed     action name, project path, desktop workspace,
                            dependencies
+Open Project with VS Code action name, project path, desktop workspace,
+                           dependencies
+Open Project with Cursor  action name, project path, desktop workspace,
+                           dependencies
 Run command               action name, command, working directory,
                            execution mode, dependencies
 Configure tiling          action name, desktop workspace, tiling, dependencies
@@ -1322,7 +1332,7 @@ Start Android Emulator     action name, Android virtual device,
                            desktop workspace, dependencies
 ```
 
-`Open Project with Zed` is intentionally specialized. Its application is always Zed in the initial product, so the inspector must not show `Application`, `Working directory`, or `Execution mode` for this action. The project directory is configured through `Project path`, and the action may optionally target a desktop workspace.
+`Open Project with Zed`, `Open Project with VS Code`, and `Open Project with Cursor` are intentionally specialized. Each action selects its editor profile internally, so the inspector must not show `Application`, `Working directory`, or `Execution mode` for these actions. The project directory is configured through `Project path`, and each action may optionally target a desktop workspace.
 
 Workspace configuration is edited through the contextual workspace field of the selected action. The inspector may offer saved workspace targets, the current workspace, a next-empty-workspace target, and a flow for linking a live COSMIC workspace. The live COSMIC picker is a modal interaction and must explain `Enter` to confirm and `Esc` to cancel. It must not reintroduce a permanent workspace pane on the editor screen.
 
@@ -1520,7 +1530,7 @@ tests/
 
 ### 21.2 Fake backends
 
-Normal tests must never alter the developer's desktop, tmux server, Docker daemon, Zed windows, Android devices, or filesystem outside a temporary test directory.
+Normal tests must never alter the developer's desktop, tmux server, Docker daemon, Zed, VS Code, or Cursor windows, Android devices, or filesystem outside a temporary test directory.
 
 Every side-effect port must have a fake or recording implementation suitable for:
 
@@ -1556,7 +1566,7 @@ Update snapshots intentionally and review every changed line.
 
 ### 21.4 Live integration tests
 
-Tests that call a real COSMIC session, tmux server, Docker daemon, Zed process, or Android Emulator must be explicitly opt-in and must never run in the normal test suite or CI by accident. Use a clearly named environment gate and document the required host setup.
+Tests that call a real COSMIC session, tmux server, Docker daemon, Zed, VS Code, or Cursor process, or an Android Emulator must be explicitly opt-in and must never run in the normal test suite or CI by accident. Use a clearly named environment gate and document the required host setup.
 
 ## 22. Performance requirements
 
@@ -1573,7 +1583,7 @@ The internal target is to keep relevant values below `200 ms` wherever possible,
 - internal dispatch;
 - state lookup that does not require waiting for external services.
 
-External operations such as starting Docker Desktop, opening Zed, booting an Android Emulator, or waiting for a health check are excluded from the `200 ms` internal target but must still provide accurate progress and bounded waits.
+External operations such as starting Docker Desktop, opening a project editor, booting an Android Emulator, or waiting for a health check are excluded from the `200 ms` internal target but must still provide accurate progress and bounded waits.
 
 Performance rules:
 
@@ -1685,13 +1695,13 @@ They illustrate capabilities such as:
 - starting Docker Compose projects and waiting for their services;
 - discovering an empty COSMIC workspace;
 - enabling COSMIC tiling;
-- opening or reusing Zed windows;
-- moving Zed windows to the target workspace;
+- opening or reusing Zed, VS Code, and Cursor project windows;
+- moving owned project-editor windows to the target workspace;
 - starting an Android Emulator and waiting for its device and window;
 - creating one tmux session with one window per configured long-running command;
 - waiting on TCP, HTTP, command, or fixed-delay conditions;
 - recording resources started by the environment;
-- stopping tmux, emulator, Zed windows, containers, Compose stacks, and Docker Desktop according to ownership and sharing rules;
+- stopping tmux, emulator, project-editor windows, containers, Compose stacks, and Docker Desktop according to ownership and sharing rules;
 - removing saved environment configuration.
 
 The Rust implementation should preserve the intended product behavior while using:

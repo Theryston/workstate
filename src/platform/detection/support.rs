@@ -19,6 +19,8 @@ pub enum CapabilityId {
     DockerDesktop,
     DockerCompose,
     Zed,
+    VsCode,
+    Cursor,
     AndroidEmulator,
     Adb,
 }
@@ -35,6 +37,8 @@ impl CapabilityId {
             Self::DockerDesktop => "docker_desktop",
             Self::DockerCompose => "docker_compose",
             Self::Zed => "zed",
+            Self::VsCode => "vs_code",
+            Self::Cursor => "cursor",
             Self::AndroidEmulator => "android_emulator",
             Self::Adb => "adb",
         }
@@ -110,6 +114,18 @@ pub fn capability_descriptors() -> Vec<CapabilityDescriptor> {
             display_name: "Zed",
             description: "Open projects in the Zed editor",
             executable: Some("zed"),
+        },
+        CapabilityDescriptor {
+            id: CapabilityId::VsCode,
+            display_name: "VS Code",
+            description: "Open projects in Visual Studio Code",
+            executable: Some("code"),
+        },
+        CapabilityDescriptor {
+            id: CapabilityId::Cursor,
+            display_name: "Cursor",
+            description: "Open projects in Cursor",
+            executable: Some("cursor"),
         },
         CapabilityDescriptor {
             id: CapabilityId::AndroidEmulator,

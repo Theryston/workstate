@@ -47,6 +47,9 @@ impl ApplicationCatalog for LinuxApplicationCatalog {
                 let Some(parsed) = parse_desktop_entry(&path)? else {
                     continue;
                 };
+                if is_specialized_application(&parsed.application) {
+                    continue;
+                }
                 applications
                     .entry(parsed.application.id.clone())
                     .or_insert(parsed.application);
@@ -134,6 +137,39 @@ fn default_application_directories() -> Vec<PathBuf> {
 
 fn non_empty_environment(name: &str) -> Option<std::ffi::OsString> {
     env::var_os(name).filter(|value| !value.to_string_lossy().trim().is_empty())
+}
+
+fn is_specialized_application(application: &InstalledApplication) -> bool {
+    let id = normalize_application_key(&application.id);
+    let name = normalize_application_key(&application.name);
+    matches!(
+        id.as_str(),
+        "zed"
+            | "devzedzed"
+            | "devzed"
+            | "code"
+            | "codeoss"
+            | "comvisualstudiocode"
+            | "comvisualstudiocodeoss"
+            | "vscode"
+            | "visualstudiocode"
+            | "cursor"
+            | "comtodesktop230313mzl4w4u92"
+            | "appimagekitcursor"
+            | "dockerdesktop"
+            | "comdockerdocker"
+    ) || matches!(
+        name.as_str(),
+        "zed" | "vscode" | "visualstudiocode" | "cursor" | "dockerdesktop"
+    )
+}
+
+fn normalize_application_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn desktop_files(directory: &Path) -> Result<Vec<PathBuf>> {
@@ -395,5 +431,40 @@ mod tests {
         assert_eq!(applications.len(), 2);
         assert_eq!(applications[0].name, "Browser");
         assert_eq!(applications[1].name, "Editor");
+    }
+
+    #[test]
+    fn hides_applications_managed_by_specialized_actions() {
+        let Ok(directory) = tempfile::tempdir() else {
+            return;
+        };
+        let entries = [
+            ("zed.desktop", "Zed", "zed"),
+            (
+                "com.visualstudio.code.desktop",
+                "Visual Studio Code",
+                "code",
+            ),
+            ("com.todesktop.230313mzl4w4u92.desktop", "Cursor", "cursor"),
+            ("docker-desktop.desktop", "Docker Desktop", "docker-desktop"),
+            ("browser.desktop", "Browser", "browser"),
+        ];
+        for (file_name, name, executable) in entries {
+            if fs::write(
+                directory.path().join(file_name),
+                format!("[Desktop Entry]\nType=Application\nName={name}\nExec={executable}\n"),
+            )
+            .is_err()
+            {
+                return;
+            }
+        }
+
+        let catalog = LinuxApplicationCatalog::with_directories(vec![directory.path().to_owned()]);
+        let Ok(applications) = catalog.list() else {
+            return;
+        };
+        assert_eq!(applications.len(), 1);
+        assert_eq!(applications[0].id, "browser");
     }
 }

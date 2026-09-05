@@ -4,16 +4,26 @@ use crate::error::{ErrorCategory, WorkstateError};
 
 #[derive(Debug, Error)]
 pub enum ZedError {
-    #[error("Zed project path is invalid: {detail}")]
-    InvalidProjectPath { detail: String },
-    #[error("Zed operation '{operation}' failed: {detail}")]
-    OperationFailed { operation: String, detail: String },
-    #[error("Zed project '{project}' is ambiguous because {matches} matching windows were found")]
-    AmbiguousProject { project: String, matches: usize },
-    #[error("Zed project '{project}' did not become observable before the timeout")]
-    WindowTimeout { project: String },
-    #[error("Zed window '{window}' did not close before the timeout")]
-    WindowCloseTimeout { window: String },
+    #[error("{editor} project path is invalid: {detail}")]
+    InvalidProjectPath { editor: String, detail: String },
+    #[error("{editor} operation '{operation}' failed: {detail}")]
+    OperationFailed {
+        editor: String,
+        operation: String,
+        detail: String,
+    },
+    #[error(
+        "{editor} project '{project}' is ambiguous because {matches} matching windows were found"
+    )]
+    AmbiguousProject {
+        editor: String,
+        project: String,
+        matches: usize,
+    },
+    #[error("{editor} project '{project}' did not become observable before the timeout")]
+    WindowTimeout { editor: String, project: String },
+    #[error("{editor} window '{window}' did not close before the timeout")]
+    WindowCloseTimeout { editor: String, window: String },
 }
 
 impl ZedError {

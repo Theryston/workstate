@@ -314,6 +314,16 @@ impl IntegrationRegistry {
             ),
             ActionHandlerDescriptor::new("open_project", "desktop", [CapabilityId::DesktopWindows]),
             ActionHandlerDescriptor::new(
+                "open_project_with_vs_code",
+                "desktop",
+                [CapabilityId::DesktopWindows, CapabilityId::VsCode],
+            ),
+            ActionHandlerDescriptor::new(
+                "open_project_with_cursor",
+                "desktop",
+                [CapabilityId::DesktopWindows, CapabilityId::Cursor],
+            ),
+            ActionHandlerDescriptor::new(
                 "run_command",
                 "terminal",
                 [CapabilityId::BackgroundProcesses],
@@ -346,6 +356,8 @@ impl IntegrationRegistry {
             (CapabilityId::DockerDesktop, "docker"),
             (CapabilityId::DockerCompose, "docker"),
             (CapabilityId::Zed, "zed"),
+            (CapabilityId::VsCode, "vs_code"),
+            (CapabilityId::Cursor, "cursor"),
             (CapabilityId::AndroidEmulator, "android"),
             (CapabilityId::Adb, "android"),
         ];
@@ -367,6 +379,8 @@ impl IntegrationRegistry {
             CapabilityId::DockerDesktop,
             CapabilityId::DockerCompose,
             CapabilityId::Zed,
+            CapabilityId::VsCode,
+            CapabilityId::Cursor,
             CapabilityId::AndroidEmulator,
             CapabilityId::Adb,
         ] {

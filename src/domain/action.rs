@@ -512,6 +512,8 @@ pub struct ActionParameters {
 pub enum ActionKind {
     OpenApplication,
     OpenProject,
+    OpenProjectWithVsCode,
+    OpenProjectWithCursor,
     #[serde(alias = "start_service")]
     RunCommand,
     ConfigureTiling,
@@ -525,11 +527,22 @@ impl ActionKind {
         match self {
             Self::OpenApplication => "open_application".to_owned(),
             Self::OpenProject => "open_project".to_owned(),
+            Self::OpenProjectWithVsCode => "open_project_with_vs_code".to_owned(),
+            Self::OpenProjectWithCursor => "open_project_with_cursor".to_owned(),
             Self::RunCommand => "run_command".to_owned(),
             Self::ConfigureTiling => "configure_tiling".to_owned(),
             Self::StartContainer => "start_container".to_owned(),
             Self::StartCompose => "start_compose".to_owned(),
             Self::StartAndroidEmulator => "start_android_emulator".to_owned(),
+        }
+    }
+
+    pub const fn project_editor_application(&self) -> Option<&'static str> {
+        match self {
+            Self::OpenProject => Some("zed"),
+            Self::OpenProjectWithVsCode => Some("code"),
+            Self::OpenProjectWithCursor => Some("cursor"),
+            _ => None,
         }
     }
 }
@@ -738,7 +751,9 @@ impl ActionSpec {
                 )?;
                 reject_execution_mode(self, action_id)?;
             }
-            ActionKind::OpenProject => {
+            ActionKind::OpenProject
+            | ActionKind::OpenProjectWithVsCode
+            | ActionKind::OpenProjectWithCursor => {
                 require_text(&self.parameters.application, action_id, "application")?;
                 require_text(&self.parameters.project_path, action_id, "project_path")?;
                 reject_execution_mode(self, action_id)?;

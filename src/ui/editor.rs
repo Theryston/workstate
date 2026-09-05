@@ -201,6 +201,14 @@ pub fn action_palette() -> Vec<ActionPaletteEntry> {
             label: "Start Android Emulator",
             kind: ActionKind::StartAndroidEmulator,
         },
+        ActionPaletteEntry {
+            label: "Open Project with VS Code",
+            kind: ActionKind::OpenProjectWithVsCode,
+        },
+        ActionPaletteEntry {
+            label: "Open Project with Cursor",
+            kind: ActionKind::OpenProjectWithCursor,
+        },
     ]
 }
 
@@ -277,8 +285,8 @@ pub struct EditorState {
 impl EditorState {
     pub fn new(mut configuration: EnvironmentConfig, mode: EditorMode) -> Self {
         for action in &mut configuration.actions {
-            if matches!(&action.kind, ActionKind::OpenProject) {
-                action.parameters.application = Some("zed".to_owned());
+            if let Some(application) = action.kind.project_editor_application() {
+                action.parameters.application = Some(application.to_owned());
             }
         }
         let selected_action = (!configuration.actions.is_empty()).then_some(0);
@@ -392,7 +400,9 @@ impl EditorState {
                 InspectorField::WorkingDirectory,
                 InspectorField::DesktopWorkspace,
             ]),
-            ActionKind::OpenProject => fields.extend([
+            ActionKind::OpenProject
+            | ActionKind::OpenProjectWithVsCode
+            | ActionKind::OpenProjectWithCursor => fields.extend([
                 InspectorField::ProjectPath,
                 InspectorField::DesktopWorkspace,
             ]),
@@ -542,8 +552,8 @@ impl EditorState {
         let mut action = ActionSpec::new(id.as_str().to_owned(), entry.kind.clone())
             .map_err(WorkstateError::from)?;
         action.display_label = Some(entry.label.to_owned());
-        if matches!(&action.kind, ActionKind::OpenProject) {
-            action.parameters.application = Some("zed".to_owned());
+        if let Some(application) = action.kind.project_editor_application() {
+            action.parameters.application = Some(application.to_owned());
         }
         self.configuration
             .add_action(action)
@@ -733,7 +743,7 @@ impl EditorState {
         project_path: Option<String>,
     ) -> Result<()> {
         let action = self.action_mut(action_id)?;
-        if !matches!(&action.kind, ActionKind::OpenProject) {
+        if action.kind.project_editor_application().is_none() {
             return Err(WorkstateError::new(
                 ErrorCategory::Ui,
                 format!("project path is not available for action '{action_id}'"),
@@ -2419,6 +2429,8 @@ fn action_label(action: &ActionSpec) -> String {
     match &action.kind {
         ActionKind::OpenApplication => "Open application".to_owned(),
         ActionKind::OpenProject => "Open Project with Zed".to_owned(),
+        ActionKind::OpenProjectWithVsCode => "Open Project with VS Code".to_owned(),
+        ActionKind::OpenProjectWithCursor => "Open Project with Cursor".to_owned(),
         ActionKind::RunCommand => "Run command".to_owned(),
         ActionKind::ConfigureTiling => "Configure tiling".to_owned(),
         ActionKind::StartContainer => "Start Docker container".to_owned(),
@@ -2691,11 +2703,21 @@ mod tests {
     #[test]
     fn palette_contains_the_capability_oriented_mvp_actions() {
         let palette = action_palette();
-        assert_eq!(palette.len(), 7);
+        assert_eq!(palette.len(), 9);
         assert!(
             palette
                 .iter()
                 .any(|entry| entry.label == "Open Project with Zed")
+        );
+        assert!(
+            palette
+                .iter()
+                .any(|entry| entry.label == "Open Project with VS Code")
+        );
+        assert!(
+            palette
+                .iter()
+                .any(|entry| entry.label == "Open Project with Cursor")
         );
         assert!(
             palette
@@ -3107,6 +3129,45 @@ mod tests {
                 .and_then(|action| action.parameters.application.as_deref()),
             Some("zed")
         );
+    }
+
+    #[test]
+    fn project_editor_actions_share_the_project_inspector_and_target_their_editor() {
+        let Some(mut configuration) = EnvironmentConfig::new("Editors").ok() else {
+            return;
+        };
+        for (index, kind) in [
+            ActionKind::OpenProject,
+            ActionKind::OpenProjectWithVsCode,
+            ActionKind::OpenProjectWithCursor,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let Some(action) = ActionSpec::new(format!("project-{index}"), kind).ok() else {
+                return;
+            };
+            assert!(configuration.add_action(action).is_ok());
+        }
+
+        let mut editor = EditorState::new(configuration, EditorMode::Create);
+        let fields = vec![
+            InspectorField::ActionLabel,
+            InspectorField::ProjectPath,
+            InspectorField::DesktopWorkspace,
+            InspectorField::Dependencies,
+        ];
+        for (index, expected_application) in ["zed", "code", "cursor"].into_iter().enumerate() {
+            editor.selected_action = Some(index);
+            editor.selected_inspector = Some(0);
+            assert_eq!(editor.inspector_fields(), fields);
+            assert_eq!(
+                editor
+                    .selected_action_spec()
+                    .and_then(|action| action.parameters.application.as_deref()),
+                Some(expected_application)
+            );
+        }
     }
 
     #[test]

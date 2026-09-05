@@ -32,7 +32,8 @@ use crate::{
         process::TokioProcessRunner,
     },
     integrations::{
-        CosmicBackend, DockerProcessBackend, IntegrationRegistry, TmuxProcessBackend, ZedBackend,
+        CosmicBackend, DockerProcessBackend, IntegrationRegistry, ProjectEditorKind,
+        TmuxProcessBackend, ZedBackend,
         android::{AndroidBackend, AndroidTool, find_tool},
     },
     platform::{
@@ -223,6 +224,18 @@ impl AppContext {
                     Arc::clone(&desktop),
                     Arc::clone(&file_system),
                 ));
+                let vs_code = Arc::new(ZedBackend::for_editor(
+                    Arc::clone(&process_runner),
+                    Arc::clone(&desktop),
+                    Arc::clone(&file_system),
+                    ProjectEditorKind::VsCode,
+                ));
+                let cursor = Arc::new(ZedBackend::for_editor(
+                    Arc::clone(&process_runner),
+                    Arc::clone(&desktop),
+                    Arc::clone(&file_system),
+                    ProjectEditorKind::Cursor,
+                ));
                 let mut handlers = ActionHandlerRegistry::new();
                 crate::integrations::cosmic::register_handlers(
                     &mut handlers,
@@ -237,6 +250,16 @@ impl AppContext {
                 crate::integrations::zed::register_handlers(
                     &mut handlers,
                     Arc::clone(&zed),
+                    Arc::clone(&desktop),
+                )?;
+                crate::integrations::zed::register_editor_handler(
+                    &mut handlers,
+                    vs_code,
+                    Arc::clone(&desktop),
+                )?;
+                crate::integrations::zed::register_editor_handler(
+                    &mut handlers,
+                    cursor,
                     Arc::clone(&desktop),
                 )?;
                 crate::integrations::command::register_handlers(

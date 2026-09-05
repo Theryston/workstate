@@ -23,18 +23,44 @@ use crate::{
     platform::CapabilityId,
 };
 
-pub use backend::{ZedBackend, ZedCommand, is_zed_application};
+pub use backend::{ProjectEditorKind, ZedBackend, ZedCommand, is_zed_application};
 pub use errors::ZedError;
 
 #[derive(Clone)]
-pub struct ZedProjectHandler {
+pub struct ProjectEditorHandler {
     editor: Arc<ZedBackend>,
     desktop: Arc<dyn DesktopBackend>,
+    action_kind: ActionKind,
+    action_key: String,
 }
 
-impl ZedProjectHandler {
+impl ProjectEditorHandler {
     pub fn new(editor: Arc<ZedBackend>, desktop: Arc<dyn DesktopBackend>) -> Self {
-        Self { editor, desktop }
+        Self::for_editor(editor, desktop)
+    }
+
+    pub fn for_editor(editor: Arc<ZedBackend>, desktop: Arc<dyn DesktopBackend>) -> Self {
+        let editor_kind = editor.editor_kind();
+        let action_kind = match editor_kind {
+            ProjectEditorKind::Zed => ActionKind::OpenProject,
+            ProjectEditorKind::VsCode => ActionKind::OpenProjectWithVsCode,
+            ProjectEditorKind::Cursor => ActionKind::OpenProjectWithCursor,
+        };
+        let action_key = action_kind.key();
+        Self {
+            editor,
+            desktop,
+            action_kind,
+            action_key,
+        }
+    }
+
+    fn editor_kind(&self) -> ProjectEditorKind {
+        self.editor.editor_kind()
+    }
+
+    fn editor_name(&self) -> &'static str {
+        self.editor_kind().display_name()
     }
 
     fn target_for(&self, action: &ActionSpec) -> Option<WorkspaceTarget> {
@@ -51,7 +77,10 @@ impl ZedProjectHandler {
         let project_path = action.parameters.project_path.as_deref().ok_or_else(|| {
             WorkstateError::new(
                 ErrorCategory::Integration,
-                "the Zed action does not contain a project path",
+                format!(
+                    "the {} action does not contain a project path",
+                    self.editor_name()
+                ),
             )
         })?;
         let project_path = self
@@ -62,7 +91,10 @@ impl ZedProjectHandler {
         if matches.len() > 1 {
             return Err(WorkstateError::new(
                 ErrorCategory::Integration,
-                "more than one Zed window owns the configured project identity",
+                format!(
+                    "more than one {} window owns the configured project identity",
+                    self.editor_name()
+                ),
             )
             .with_context("project_path", project_path.display().to_string())
             .with_context("matches", matches.len().to_string()));
@@ -78,7 +110,10 @@ impl ZedProjectHandler {
                     _ => {
                         return Err(WorkstateError::new(
                             ErrorCategory::Integration,
-                            "more than one Zed window owns the configured project identity",
+                            format!(
+                                "more than one {} window owns the configured project identity",
+                                self.editor_name()
+                            ),
                         )
                         .with_context("project_path", project_path.display().to_string())
                         .with_context("matches", persisted_matches.len().to_string()));
@@ -88,7 +123,10 @@ impl ZedProjectHandler {
             _ => {
                 return Err(WorkstateError::new(
                     ErrorCategory::Integration,
-                    "more than one Zed window owns the configured project identity",
+                    format!(
+                        "more than one {} window owns the configured project identity",
+                        self.editor_name()
+                    ),
                 )
                 .with_context("project_path", project_path.display().to_string())
                 .with_context("matches", matches.len().to_string()));
@@ -121,11 +159,13 @@ impl ZedProjectHandler {
                 continue;
             };
             if let Some(application) = window.application.as_deref()
-                && !is_zed_application(application)
+                && !self.editor_kind().matches_application(application)
             {
                 return Ok(ActionObservation::unknown(format!(
-                    "persisted Zed window '{}' now identifies application '{}'",
-                    resource.resource.stable_identity, application
+                    "persisted {} window '{}' now identifies application '{}'",
+                    self.editor_name(),
+                    resource.resource.stable_identity,
+                    application
                 )));
             }
             observed.push(resource.clone());
@@ -142,7 +182,10 @@ impl ZedProjectHandler {
         let project_path = action.parameters.project_path.as_deref().ok_or_else(|| {
             WorkstateError::new(
                 ErrorCategory::Integration,
-                "the Zed action does not contain a project path",
+                format!(
+                    "the {} action does not contain a project path",
+                    self.editor_name()
+                ),
             )
         })?;
         let project_path = self
@@ -173,24 +216,35 @@ impl ZedProjectHandler {
         let mut mutations = Vec::new();
         let mut changed =
             outcome.status == crate::application::ports::EditorOperationStatus::Launched;
-        let mut outputs = vec![ActionOutput::log(
-            "inspected Zed windows before opening project",
-        )];
+        let mut outputs = vec![ActionOutput::log(format!(
+            "inspected {} windows before opening project",
+            self.editor_name()
+        ))];
         outputs.push(ActionOutput::log(if outcome.owned {
-            format!("launched Zed for '{}'", project_path.display())
+            format!(
+                "launched {} for '{}'",
+                self.editor_name(),
+                project_path.display()
+            )
         } else {
-            format!("reused Zed for '{}'", project_path.display())
+            format!(
+                "reused {} for '{}'",
+                self.editor_name(),
+                project_path.display()
+            )
         }));
         if outcome.owned {
-            outputs.push(ActionOutput::log(
-                "waited for the launched Zed project window to become observable",
-            ));
+            outputs.push(ActionOutput::log(format!(
+                "waited for the launched {} project window to become observable",
+                self.editor_name()
+            )));
         }
 
         if let Some(target) = target {
             let target_label = workspace_target_label(&target);
             outputs.push(ActionOutput::log(format!(
-                "resolved Zed destination workspace '{target_label}'"
+                "resolved {} destination workspace '{target_label}'",
+                self.editor_name()
             )));
             match move_window_with_retry(
                 self.desktop.as_ref(),
@@ -198,13 +252,15 @@ impl ZedProjectHandler {
                 target,
                 cancellation.clone(),
                 action_timeout(action),
+                self.editor_name(),
             )
             .await
             {
                 Ok(Some((previous, destination))) => {
                     changed = true;
                     outputs.push(ActionOutput::log(format!(
-                        "moved Zed window to desktop workspace '{destination}'"
+                        "moved {} window to desktop workspace '{destination}'",
+                        self.editor_name()
                     )));
                     window.workspace_identity = Some(destination.clone());
                     record
@@ -338,7 +394,8 @@ impl ZedProjectHandler {
                     .close_window(&resource.resource.stable_identity)
                     .await?;
                 outputs.push(ActionOutput::log(format!(
-                    "closed owned Zed window '{}'",
+                    "closed owned {} window '{}'",
+                    self.editor_name(),
                     resource.resource.stable_identity
                 )));
             }
@@ -372,10 +429,12 @@ impl ZedProjectHandler {
                 &resource.resource.stable_identity,
                 cancellation.clone(),
                 action_timeout(action),
+                self.editor_name(),
             )
             .await?;
             outputs.push(ActionOutput::log(format!(
-                "closed owned Zed window '{}'",
+                "closed owned {} window '{}'",
+                self.editor_name(),
                 resource.resource.stable_identity
             )));
         }
@@ -383,13 +442,18 @@ impl ZedProjectHandler {
     }
 }
 
-impl ActionHandler for ZedProjectHandler {
+impl ActionHandler for ProjectEditorHandler {
     fn action_key(&self) -> &str {
-        "open_project"
+        &self.action_key
     }
 
     fn required_capabilities(&self) -> std::collections::BTreeSet<CapabilityId> {
-        [CapabilityId::DesktopWindows, CapabilityId::Zed]
+        let editor_capability = match self.editor_kind() {
+            ProjectEditorKind::Zed => CapabilityId::Zed,
+            ProjectEditorKind::VsCode => CapabilityId::VsCode,
+            ProjectEditorKind::Cursor => CapabilityId::Cursor,
+        };
+        [CapabilityId::DesktopWindows, editor_capability]
             .into_iter()
             .collect()
     }
@@ -399,22 +463,31 @@ impl ActionHandler for ZedProjectHandler {
     }
 
     fn validate(&self, action: &ActionSpec) -> Result<()> {
-        if action.kind != ActionKind::OpenProject {
+        if action.kind != self.action_kind {
             return Err(WorkstateError::new(
                 ErrorCategory::Integration,
-                "the Zed project handler received an incompatible action",
+                format!(
+                    "the {} project handler received an incompatible action",
+                    self.editor_name()
+                ),
             ));
         }
         let application = action.parameters.application.as_deref().ok_or_else(|| {
             WorkstateError::new(
                 ErrorCategory::Integration,
-                "the Zed action does not contain an application identity",
+                format!(
+                    "the {} action does not contain an application identity",
+                    self.editor_name()
+                ),
             )
         })?;
-        if !is_zed_application(application) {
+        if !self.editor_kind().matches_application(application) {
             return Err(WorkstateError::new(
                 ErrorCategory::Integration,
-                "the open-project action application is not Zed",
+                format!(
+                    "the open-project action application is not {}",
+                    self.editor_name()
+                ),
             )
             .with_context("application", application));
         }
@@ -485,9 +558,20 @@ pub fn register_handlers(
     editor: Arc<ZedBackend>,
     desktop: Arc<dyn DesktopBackend>,
 ) -> Result<()> {
-    registry.register(ZedProjectHandler::new(editor, desktop))?;
+    registry.register(ProjectEditorHandler::new(editor, desktop))?;
     Ok(())
 }
+
+pub fn register_editor_handler(
+    registry: &mut ActionHandlerRegistry,
+    editor: Arc<ZedBackend>,
+    desktop: Arc<dyn DesktopBackend>,
+) -> Result<()> {
+    registry.register(ProjectEditorHandler::for_editor(editor, desktop))?;
+    Ok(())
+}
+
+pub type ZedProjectHandler = ProjectEditorHandler;
 
 fn matching_projects(
     windows: &[EditorWindowSnapshot],
@@ -574,6 +658,7 @@ async fn move_window_with_retry(
     target: WorkspaceTarget,
     cancellation: CancellationToken,
     timeout: Duration,
+    editor_name: &str,
 ) -> Result<Option<(Option<String>, String)>> {
     let mut resolution =
         ensure_workspace(desktop, target.clone(), cancellation.clone(), timeout).await?;
@@ -586,7 +671,7 @@ async fn move_window_with_retry(
         let Some(window) = snapshot.window(window_identity) else {
             return Err(WorkstateError::new(
                 ErrorCategory::Integration,
-                "the Zed window disappeared before it could be moved",
+                format!("the {editor_name} window disappeared before it could be moved"),
             )
             .with_context("window_identity", window_identity));
         };
@@ -603,7 +688,7 @@ async fn move_window_with_retry(
                 let Some(updated_window) = refreshed.window(window_identity) else {
                     return Err(WorkstateError::new(
                         ErrorCategory::Integration,
-                        "the Zed window disappeared after it was moved",
+                        format!("the {editor_name} window disappeared after it was moved"),
                     )
                     .with_context("window_identity", window_identity));
                 };
@@ -617,7 +702,9 @@ async fn move_window_with_retry(
                 }
                 return Err(WorkstateError::new(
                     ErrorCategory::Integration,
-                    "the desktop backend did not confirm the Zed window movement",
+                    format!(
+                        "the desktop backend did not confirm the {editor_name} window movement"
+                    ),
                 )
                 .with_context("window_identity", window_identity)
                 .with_context("workspace_identity", workspace.identity.clone()));
@@ -638,7 +725,7 @@ async fn move_window_with_retry(
     }
     Err(WorkstateError::new(
         ErrorCategory::Integration,
-        "the Zed window could not be moved after a safe retry",
+        format!("the {editor_name} window could not be moved after a safe retry"),
     ))
 }
 
@@ -647,6 +734,7 @@ async fn wait_for_window_absence(
     window_identity: &str,
     cancellation: CancellationToken,
     timeout: Duration,
+    editor_name: &str,
 ) -> Result<()> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
@@ -657,6 +745,7 @@ async fn wait_for_window_absence(
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             return Err(ZedError::WindowCloseTimeout {
+                editor: editor_name.to_owned(),
                 window: window_identity.to_owned(),
             }
             .into_workstate());
@@ -665,7 +754,9 @@ async fn wait_for_window_absence(
             _ = cancellation.cancelled() => {
                 return Err(WorkstateError::new(
                     ErrorCategory::Runtime,
-                    "operation was cancelled while verifying the Zed window close",
+                    format!(
+                        "operation was cancelled while verifying the {editor_name} window close"
+                    ),
                 ));
             }
             _ = tokio::time::sleep(remaining.min(Duration::from_millis(25))) => {}

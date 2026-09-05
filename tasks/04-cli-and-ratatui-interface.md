@@ -151,6 +151,8 @@ The action palette should use capability-oriented labels such as:
 ~~~
 Open application
 Open Project with Zed
+Open Project with VS Code
+Open Project with Cursor
 Run command
 Configure tiling
 Start Docker container

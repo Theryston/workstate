@@ -14,4 +14,4 @@ pub use cosmic::CosmicBackend;
 pub use docker::{DockerActionHandler, DockerProcessBackend};
 pub use registry::{ActionHandlerDescriptor, CapabilityAvailability, IntegrationRegistry};
 pub use tmux::TmuxProcessBackend;
-pub use zed::ZedBackend;
+pub use zed::{ProjectEditorKind, ZedBackend};
