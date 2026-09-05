@@ -324,11 +324,6 @@ impl IntegrationRegistry {
                 [CapabilityId::BackgroundProcesses],
             ),
             ActionHandlerDescriptor::new(
-                "create_or_select_workspace",
-                "desktop",
-                [CapabilityId::DesktopWorkspaces],
-            ),
-            ActionHandlerDescriptor::new(
                 "configure_tiling",
                 "desktop",
                 [CapabilityId::DesktopTiling],

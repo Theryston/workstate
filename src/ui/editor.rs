@@ -48,7 +48,6 @@ pub enum InspectorField {
     Command,
     ExecutionMode,
     DesktopWorkspace,
-    WorkspaceTarget,
     Tiling,
     ContainerName,
     ComposeProjectName,
@@ -67,7 +66,6 @@ impl InspectorField {
             Self::Command => "Command",
             Self::ExecutionMode => "Execution mode",
             Self::DesktopWorkspace => "Desktop workspace",
-            Self::WorkspaceTarget => "Workspace target",
             Self::Tiling => "Tiling",
             Self::ContainerName => "Container",
             Self::ComposeProjectName => "Compose project",
@@ -95,7 +93,6 @@ pub struct InspectorChoice {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InspectorChoiceValue {
     DesktopWorkspace(Option<WorkspaceId>),
-    WorkspaceTarget(Option<WorkspaceId>),
     LinkLiveWorkspace,
     AddNextEmptyWorkspace,
     ExecutionMode(Option<ExecutionMode>),
@@ -144,10 +141,6 @@ pub fn action_palette() -> Vec<ActionPaletteEntry> {
         ActionPaletteEntry {
             label: "Start service",
             kind: ActionKind::StartService,
-        },
-        ActionPaletteEntry {
-            label: "Create or select workspace",
-            kind: ActionKind::CreateOrSelectWorkspace,
         },
         ActionPaletteEntry {
             label: "Configure tiling",
@@ -324,9 +317,6 @@ impl EditorState {
                 InspectorField::WorkingDirectory,
                 InspectorField::ExecutionMode,
             ]),
-            ActionKind::CreateOrSelectWorkspace => {
-                fields.push(InspectorField::WorkspaceTarget);
-            }
             ActionKind::ConfigureTiling => {
                 fields.extend([InspectorField::DesktopWorkspace, InspectorField::Tiling]);
             }
@@ -396,12 +386,6 @@ impl EditorState {
                 .as_ref()
                 .map(|id| self.workspace_label(id))
                 .unwrap_or_else(|| "Current workspace".to_owned()),
-            InspectorField::WorkspaceTarget => action
-                .parameters
-                .workspace_id
-                .as_ref()
-                .map(|id| self.workspace_label(id))
-                .unwrap_or_else(|| "not set".to_owned()),
             InspectorField::Tiling => action
                 .desktop_workspace
                 .as_ref()
@@ -779,23 +763,6 @@ impl EditorState {
         Ok(())
     }
 
-    pub fn set_action_workspace_parameter(
-        &mut self,
-        action_id: &ActionId,
-        workspace_id: Option<WorkspaceId>,
-    ) -> Result<()> {
-        let action = self.action_mut(action_id)?;
-        if !matches!(&action.kind, ActionKind::CreateOrSelectWorkspace) {
-            return Err(WorkstateError::new(
-                ErrorCategory::Ui,
-                format!("workspace parameter is not available for action '{action_id}'"),
-            ));
-        }
-        action.parameters.workspace_id = workspace_id;
-        self.mark_dirty();
-        Ok(())
-    }
-
     pub fn add_dependency(&mut self, action_id: &ActionId, dependency_id: &ActionId) -> Result<()> {
         if action_id == dependency_id {
             return Err(WorkstateError::new(
@@ -1043,9 +1010,7 @@ impl EditorState {
             InspectorField::ComposeProjectName => self.begin_input(EditorField::ComposeProjectName),
             InspectorField::EmulatorAvd => self.begin_input(EditorField::EmulatorAvd),
             InspectorField::ReadinessDelay => self.begin_input(EditorField::ReadinessDelay),
-            InspectorField::DesktopWorkspace | InspectorField::WorkspaceTarget => {
-                self.open_workspace_choice_picker(field)
-            }
+            InspectorField::DesktopWorkspace => self.open_workspace_choice_picker(field),
             InspectorField::ExecutionMode => self.open_execution_mode_picker(),
             InspectorField::Tiling => self.open_tiling_picker(),
             InspectorField::Dependencies => self.open_dependency_picker(),
@@ -1053,37 +1018,23 @@ impl EditorState {
     }
 
     fn open_workspace_choice_picker(&mut self, field: InspectorField) {
+        if field != InspectorField::DesktopWorkspace {
+            return;
+        }
         let current = self.selected_action_spec().and_then(|action| match field {
             InspectorField::DesktopWorkspace => action.desktop_workspace.clone(),
-            InspectorField::WorkspaceTarget => action.parameters.workspace_id.clone(),
             _ => None,
         });
         let mut options = Vec::with_capacity(self.configuration.workspaces.len() + 3);
-        let current_label = match field {
-            InspectorField::DesktopWorkspace => "Current workspace",
-            InspectorField::WorkspaceTarget => "No workspace selected",
-            _ => "Not available",
-        };
-        let current_value = match field {
-            InspectorField::DesktopWorkspace => InspectorChoiceValue::DesktopWorkspace(None),
-            InspectorField::WorkspaceTarget => InspectorChoiceValue::WorkspaceTarget(None),
-            _ => return,
-        };
+        let current_label = "Current workspace";
+        let current_value = InspectorChoiceValue::DesktopWorkspace(None);
         options.push(InspectorChoice {
             label: current_label.to_owned(),
             detail: None,
             value: current_value,
         });
         for workspace in &self.configuration.workspaces {
-            let value = match field {
-                InspectorField::DesktopWorkspace => {
-                    InspectorChoiceValue::DesktopWorkspace(Some(workspace.id.clone()))
-                }
-                InspectorField::WorkspaceTarget => {
-                    InspectorChoiceValue::WorkspaceTarget(Some(workspace.id.clone()))
-                }
-                _ => return,
-            };
+            let value = InspectorChoiceValue::DesktopWorkspace(Some(workspace.id.clone()));
             options.push(InspectorChoice {
                 label: self.workspace_label(&workspace.id),
                 detail: Some(workspace_target_label(workspace)),
@@ -1102,18 +1053,8 @@ impl EditorState {
         });
         let selected = options
             .iter()
-            .position(|option| match (&option.value, &current) {
-                (InspectorChoiceValue::DesktopWorkspace(value), current)
-                    if field == InspectorField::DesktopWorkspace =>
-                {
-                    value == current
-                }
-                (InspectorChoiceValue::WorkspaceTarget(value), current)
-                    if field == InspectorField::WorkspaceTarget =>
-                {
-                    value == current
-                }
-                _ => false,
+            .position(|option| {
+                matches!(&option.value, InspectorChoiceValue::DesktopWorkspace(value) if value == &current)
             })
             .unwrap_or(0);
         self.inspector_picker = Some(InspectorPicker::Choices {
@@ -1291,10 +1232,6 @@ impl EditorState {
                         let result = self.set_selected_action_workspace_field(field, workspace_id);
                         self.record_error(result);
                     }
-                    InspectorChoiceValue::WorkspaceTarget(workspace_id) => {
-                        let result = self.set_selected_action_workspace_field(field, workspace_id);
-                        self.record_error(result);
-                    }
                     InspectorChoiceValue::LinkLiveWorkspace => {
                         self.workspace_picker_target = Some(field);
                         self.open_workspace_picker();
@@ -1357,9 +1294,6 @@ impl EditorState {
         match field {
             InspectorField::DesktopWorkspace => {
                 self.set_action_desktop_workspace(&action_id, workspace_id)
-            }
-            InspectorField::WorkspaceTarget => {
-                self.set_action_workspace_parameter(&action_id, workspace_id)
             }
             _ => Err(WorkstateError::new(
                 ErrorCategory::Ui,
@@ -1968,7 +1902,6 @@ fn action_label(action: &ActionSpec) -> String {
         ActionKind::OpenProject => "Open Project with Zed".to_owned(),
         ActionKind::RunCommand => "Run command".to_owned(),
         ActionKind::StartService => "Start service".to_owned(),
-        ActionKind::CreateOrSelectWorkspace => "Create or select workspace".to_owned(),
         ActionKind::ConfigureTiling => "Configure tiling".to_owned(),
         ActionKind::StartContainer => "Start Docker container".to_owned(),
         ActionKind::StartCompose => "Start Docker Compose stack".to_owned(),
@@ -2009,7 +1942,6 @@ fn validation_field(error: &DomainError) -> Option<InspectorField> {
             "project_path" => Some(InspectorField::ProjectPath),
             "working_directory" => Some(InspectorField::WorkingDirectory),
             "command" => Some(InspectorField::Command),
-            "workspace_id" => Some(InspectorField::WorkspaceTarget),
             "desktop_workspace" => Some(InspectorField::DesktopWorkspace),
             "container" | "container.name" => Some(InspectorField::ContainerName),
             "compose" | "compose.project_name" => Some(InspectorField::ComposeProjectName),
@@ -2126,7 +2058,7 @@ mod tests {
     #[test]
     fn palette_contains_the_capability_oriented_mvp_actions() {
         let palette = action_palette();
-        assert_eq!(palette.len(), 12);
+        assert_eq!(palette.len(), 11);
         assert!(
             palette
                 .iter()
@@ -2138,6 +2070,11 @@ mod tests {
                 .any(|entry| entry.label == "Start Docker Compose stack")
         );
         assert!(palette.iter().any(|entry| entry.label == "Custom action"));
+        assert!(
+            palette
+                .iter()
+                .all(|entry| entry.label != "Create or select workspace")
+        );
     }
 
     #[test]
@@ -2237,12 +2174,12 @@ mod tests {
             return;
         };
         let mut editor = EditorState::new(configuration, EditorMode::Create);
-        let first = editor.add_action_from_palette(11);
+        let first = editor.add_action_from_palette(10);
         assert!(first.is_ok());
         let Some(first) = first.ok() else {
             return;
         };
-        let second = editor.add_action_from_palette(11);
+        let second = editor.add_action_from_palette(10);
         assert!(second.is_ok());
         let Some(second) = second.ok() else {
             return;
@@ -2472,7 +2409,7 @@ mod tests {
             return;
         };
         let mut editor = EditorState::new(configuration, EditorMode::Create);
-        assert!(editor.add_action_from_palette(11).is_ok());
+        assert!(editor.add_action_from_palette(10).is_ok());
         assert_eq!(editor.panel, EditorPanel::Actions);
         assert_eq!(editor.handle_key(KeyCode::Right), super::EditorAction::None);
         assert_eq!(editor.panel, EditorPanel::Inspector);
@@ -2494,7 +2431,7 @@ mod tests {
             return;
         };
         let mut editor = EditorState::new(configuration, EditorMode::Create);
-        assert!(editor.add_action_from_palette(11).is_ok());
+        assert!(editor.add_action_from_palette(10).is_ok());
         editor.panel = EditorPanel::Inspector;
 
         assert_eq!(

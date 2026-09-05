@@ -29,28 +29,11 @@ pub use errors::CosmicError;
 #[derive(Clone)]
 pub struct WorkspaceHandler {
     backend: Arc<dyn DesktopBackend>,
-    action: WorkspaceHandlerAction,
-}
-
-#[derive(Clone, Copy)]
-enum WorkspaceHandlerAction {
-    Select,
-    Tiling,
 }
 
 impl WorkspaceHandler {
-    pub fn selector(backend: Arc<dyn DesktopBackend>) -> Self {
-        Self {
-            backend,
-            action: WorkspaceHandlerAction::Select,
-        }
-    }
-
     pub fn tiling(backend: Arc<dyn DesktopBackend>) -> Self {
-        Self {
-            backend,
-            action: WorkspaceHandlerAction::Tiling,
-        }
+        Self { backend }
     }
 
     fn target_for(&self, action: &ActionSpec) -> Result<WorkspaceTarget> {
@@ -89,11 +72,10 @@ impl WorkspaceHandler {
     ) -> Result<ActionObservation> {
         cancellation.check()?;
         let target = self.target_for(action)?;
-        if matches!(self.action, WorkspaceHandlerAction::Tiling)
-            && action
-                .resolved_tiling
-                .unwrap_or(TilingPreference::Unchanged)
-                == TilingPreference::Unchanged
+        if action
+            .resolved_tiling
+            .unwrap_or(TilingPreference::Unchanged)
+            == TilingPreference::Unchanged
         {
             return Ok(ActionObservation::already_correct());
         }
@@ -102,9 +84,7 @@ impl WorkspaceHandler {
         let Some(workspace) = resolution.workspace else {
             return Ok(ActionObservation::requires_change());
         };
-        if matches!(self.action, WorkspaceHandlerAction::Tiling)
-            && !tiling_matches(&workspace, action.resolved_tiling.unwrap_or_default())?
-        {
+        if !tiling_matches(&workspace, action.resolved_tiling.unwrap_or_default())? {
             return Ok(ActionObservation::requires_change().with_resources(vec![
                 workspace_record(action, &workspace, OwnershipStatus::ReusedExisting, true)?,
             ]));
@@ -136,127 +116,97 @@ impl WorkspaceHandler {
         let Some(workspace) = resolution.workspace else {
             return Ok(ActionExecutionResult::default());
         };
-        match self.action {
-            WorkspaceHandlerAction::Select => {
-                let created = resolution.status == DesktopOperationStatus::Created;
-                let ownership = if created {
-                    OwnershipStatus::CreatedByCurrentRun
-                } else {
-                    OwnershipStatus::ReusedExisting
-                };
-                let record = workspace_record(action, &workspace, ownership, !created)?;
-                Ok(ActionExecutionResult {
-                    changed: created,
-                    resources: vec![record],
-                    mutations: Vec::new(),
-                    outputs: vec![
-                        ActionOutput::log("inspected desktop workspaces and windows"),
-                        ActionOutput::log(format!(
-                            "resolved desktop workspace '{}'",
-                            workspace.identity
-                        )),
-                        ActionOutput::log(if created {
-                            format!("created desktop workspace '{}'", workspace.identity)
-                        } else {
-                            format!("reused desktop workspace '{}'", workspace.identity)
-                        }),
-                    ],
-                })
-            }
-            WorkspaceHandlerAction::Tiling => {
-                let desired = action.resolved_tiling.unwrap_or_default();
-                if desired == TilingPreference::Unchanged {
-                    return Ok(ActionExecutionResult::default());
-                }
-                let Some(current) = workspace.tiling_enabled else {
-                    return Err(WorkstateError::new(
-                        ErrorCategory::Integration,
-                        format!(
-                            "tiling state is unavailable for desktop workspace '{}'",
-                            workspace.identity
-                        ),
-                    ));
-                };
-                let enabled = desired == TilingPreference::Enabled;
-                let created = resolution.status == DesktopOperationStatus::Created;
-                let ownership = if created {
-                    OwnershipStatus::CreatedByCurrentRun
-                } else {
-                    OwnershipStatus::ReusedExisting
-                };
-                let record = workspace_record(action, &workspace, ownership, !created)?;
-                if current == enabled {
-                    return Ok(ActionExecutionResult {
-                        changed: false,
-                        resources: vec![record],
-                        mutations: Vec::new(),
-                        outputs: vec![
-                            ActionOutput::log("inspected desktop workspaces and windows"),
-                            ActionOutput::log(format!(
-                                "resolved desktop workspace '{}'",
-                                workspace.identity
-                            )),
-                            ActionOutput::log(format!(
-                                "desktop workspace '{}' already has tiling {}",
-                                workspace.identity,
-                                if enabled { "enabled" } else { "disabled" }
-                            )),
-                        ],
-                    });
-                }
-                self.backend
-                    .set_tiling(&workspace.identity, enabled)
-                    .await?;
-                let refreshed = self.backend.snapshot().await?;
-                let Some(updated_workspace) = refreshed.workspace(&workspace.identity) else {
-                    return Err(WorkstateError::new(
-                        ErrorCategory::Integration,
-                        format!(
-                            "desktop workspace '{}' disappeared after its tiling change",
-                            workspace.identity
-                        ),
-                    ));
-                };
-                if updated_workspace.tiling_enabled != Some(enabled) {
-                    return Err(WorkstateError::new(
-                        ErrorCategory::Integration,
-                        format!(
-                            "desktop workspace '{}' did not confirm tiling {}",
-                            workspace.identity,
-                            if enabled { "enabled" } else { "disabled" }
-                        ),
-                    ));
-                }
-                let resource = record.resource.clone();
-                let mut mutation =
-                    MutationRecord::new(format!("desktop.workspace.{}.tiling", workspace.identity))
-                        .map_err(WorkstateError::from)?;
-                mutation.action_id = Some(action.id.clone());
-                mutation.resource = Some(resource);
-                mutation.previous_value = Some(current.to_string());
-                mutation.applied_value = Some(enabled.to_string());
-                mutation.ownership = OwnershipStatus::CreatedByCurrentRun;
-                mutation.compensation = CompensationOperation::Handler;
-                mutation.cleanup_policy = action.cleanup_policy;
-                Ok(ActionExecutionResult {
-                    changed: true,
-                    resources: vec![record],
-                    mutations: vec![mutation],
-                    outputs: vec![
-                        ActionOutput::log("inspected desktop workspaces and windows"),
-                        ActionOutput::log(format!(
-                            "resolved desktop workspace '{}'",
-                            workspace.identity
-                        )),
-                        ActionOutput::log(format!(
-                            "set desktop workspace '{}' tiling to {}",
-                            workspace.identity,
-                            if enabled { "enabled" } else { "disabled" }
-                        )),
-                    ],
-                })
-            }
+        let desired = action.resolved_tiling.unwrap_or_default();
+        if desired == TilingPreference::Unchanged {
+            return Ok(ActionExecutionResult::default());
         }
+        let Some(current) = workspace.tiling_enabled else {
+            return Err(WorkstateError::new(
+                ErrorCategory::Integration,
+                format!(
+                    "tiling state is unavailable for desktop workspace '{}'",
+                    workspace.identity
+                ),
+            ));
+        };
+        let enabled = desired == TilingPreference::Enabled;
+        let created = resolution.status == DesktopOperationStatus::Created;
+        let ownership = if created {
+            OwnershipStatus::CreatedByCurrentRun
+        } else {
+            OwnershipStatus::ReusedExisting
+        };
+        let record = workspace_record(action, &workspace, ownership, !created)?;
+        if current == enabled {
+            return Ok(ActionExecutionResult {
+                changed: false,
+                resources: vec![record],
+                mutations: Vec::new(),
+                outputs: vec![
+                    ActionOutput::log("inspected desktop workspaces and windows"),
+                    ActionOutput::log(format!(
+                        "resolved desktop workspace '{}'",
+                        workspace.identity
+                    )),
+                    ActionOutput::log(format!(
+                        "desktop workspace '{}' already has tiling {}",
+                        workspace.identity,
+                        if enabled { "enabled" } else { "disabled" }
+                    )),
+                ],
+            });
+        }
+        self.backend
+            .set_tiling(&workspace.identity, enabled)
+            .await?;
+        let refreshed = self.backend.snapshot().await?;
+        let Some(updated_workspace) = refreshed.workspace(&workspace.identity) else {
+            return Err(WorkstateError::new(
+                ErrorCategory::Integration,
+                format!(
+                    "desktop workspace '{}' disappeared after its tiling change",
+                    workspace.identity
+                ),
+            ));
+        };
+        if updated_workspace.tiling_enabled != Some(enabled) {
+            return Err(WorkstateError::new(
+                ErrorCategory::Integration,
+                format!(
+                    "desktop workspace '{}' did not confirm tiling {}",
+                    workspace.identity,
+                    if enabled { "enabled" } else { "disabled" }
+                ),
+            ));
+        }
+        let resource = record.resource.clone();
+        let mut mutation =
+            MutationRecord::new(format!("desktop.workspace.{}.tiling", workspace.identity))
+                .map_err(WorkstateError::from)?;
+        mutation.action_id = Some(action.id.clone());
+        mutation.resource = Some(resource);
+        mutation.previous_value = Some(current.to_string());
+        mutation.applied_value = Some(enabled.to_string());
+        mutation.ownership = OwnershipStatus::CreatedByCurrentRun;
+        mutation.compensation = CompensationOperation::Handler;
+        mutation.cleanup_policy = action.cleanup_policy;
+        Ok(ActionExecutionResult {
+            changed: true,
+            resources: vec![record],
+            mutations: vec![mutation],
+            outputs: vec![
+                ActionOutput::log("inspected desktop workspaces and windows"),
+                ActionOutput::log(format!(
+                    "resolved desktop workspace '{}'",
+                    workspace.identity
+                )),
+                ActionOutput::log(format!(
+                    "set desktop workspace '{}' tiling to {}",
+                    workspace.identity,
+                    if enabled { "enabled" } else { "disabled" }
+                )),
+            ],
+        })
     }
 
     async fn compensate_inner(
@@ -356,27 +306,15 @@ impl WorkspaceHandler {
 
 impl ActionHandler for WorkspaceHandler {
     fn action_key(&self) -> &str {
-        match self.action {
-            WorkspaceHandlerAction::Select => "create_or_select_workspace",
-            WorkspaceHandlerAction::Tiling => "configure_tiling",
-        }
+        "configure_tiling"
     }
 
     fn required_capabilities(&self) -> std::collections::BTreeSet<CapabilityId> {
-        [match self.action {
-            WorkspaceHandlerAction::Select => CapabilityId::DesktopWorkspaces,
-            WorkspaceHandlerAction::Tiling => CapabilityId::DesktopTiling,
-        }]
-        .into_iter()
-        .collect()
+        [CapabilityId::DesktopTiling].into_iter().collect()
     }
 
     fn validate(&self, action: &ActionSpec) -> Result<()> {
-        let expected = match self.action {
-            WorkspaceHandlerAction::Select => ActionKind::CreateOrSelectWorkspace,
-            WorkspaceHandlerAction::Tiling => ActionKind::ConfigureTiling,
-        };
-        if action.kind != expected {
+        if action.kind != ActionKind::ConfigureTiling {
             return Err(WorkstateError::new(
                 ErrorCategory::Integration,
                 format!(
@@ -427,7 +365,6 @@ pub fn register_handlers(
     registry: &mut ActionHandlerRegistry,
     backend: Arc<dyn DesktopBackend>,
 ) -> Result<()> {
-    registry.register(WorkspaceHandler::selector(Arc::clone(&backend)))?;
     registry.register(WorkspaceHandler::tiling(backend))?;
     Ok(())
 }

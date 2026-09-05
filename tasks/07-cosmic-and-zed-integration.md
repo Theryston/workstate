@@ -106,6 +106,8 @@ Implement a deterministic resolver for the workspace target declared by an actio
 5. A none target leaves the resource in its current location and must not cause a desktop mutation.
 6. If a target disappears between planning and execution, refresh the snapshot and retry the safe resolution once before returning an error.
 7. Store the resolved workspace identifier in runtime state so rollback and stop do not depend on a later name lookup.
+8. Treat each configured workspace ID as a virtual binding. Resolve that binding once during run preparation and reuse its concrete workspace identity for every referencing action, including dependent actions.
+9. Reserve identities selected for distinct next-empty bindings in deterministic configuration order. Never resolve next-empty independently after another action has changed workspace occupancy.
 
 ### 4. Implement per-workspace tiling
 

@@ -149,7 +149,6 @@ Open application
 Open Project with Zed
 Run command
 Start service
-Create or select workspace
 Configure tiling
 Start Docker container
 Start Docker Compose stack

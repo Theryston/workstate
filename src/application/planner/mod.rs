@@ -10,10 +10,13 @@ use std::{
 use tokio::{sync::watch, task::JoinSet};
 
 use crate::{
-    application::ports::BoxFuture,
+    application::ports::{
+        BoxFuture, DesktopBackend, resolve_workspace_target,
+        resolve_workspace_target_with_reservations,
+    },
     domain::{
-        ActionGraph, ActionId, ActionKind, ActionSpec, MutationRecord, ReadinessCheck,
-        ResourceRecord,
+        ActionGraph, ActionId, ActionKind, ActionSpec, EnvironmentConfig, MutationRecord,
+        ReadinessCheck, ResourceRecord, WorkspaceId, WorkspaceReference, WorkspaceTarget,
     },
     error::{ErrorCategory, Result, WorkstateError},
     integrations::IntegrationRegistry,
@@ -502,6 +505,75 @@ impl<'a> Planner<'a> {
         ))
     }
 
+    pub async fn resolve_workspace_targets(
+        &self,
+        plan: &mut ExecutionPlan,
+        configuration: &EnvironmentConfig,
+        desktop: &dyn DesktopBackend,
+        cancellation: CancellationToken,
+    ) -> Result<()> {
+        let referenced_workspace_ids = plan
+            .entries()
+            .filter(|entry| entry.classification == PlanClassification::Unknown)
+            .filter_map(|entry| workspace_id_for_action(&entry.action).cloned())
+            .collect::<BTreeSet<_>>();
+        if referenced_workspace_ids.is_empty() {
+            return Ok(());
+        }
+
+        cancellation.check()?;
+        let snapshot = desktop.snapshot().await?;
+        let mut reserved_next_empty = BTreeSet::new();
+        let mut resolved_targets = BTreeMap::<WorkspaceId, WorkspaceTarget>::new();
+
+        for workspace in &configuration.workspaces {
+            if !referenced_workspace_ids.contains(&workspace.id) {
+                continue;
+            }
+            let target = match &workspace.target {
+                WorkspaceTarget::Current | WorkspaceTarget::Existing { .. } => {
+                    let resolution = resolve_workspace_target(&snapshot, &workspace.target)?;
+                    anchor_workspace_target(&workspace.target, resolution)?
+                }
+                WorkspaceTarget::NextEmpty => {
+                    let resolution = resolve_workspace_target_with_reservations(
+                        &snapshot,
+                        &workspace.target,
+                        &reserved_next_empty,
+                    )?;
+                    let anchored = anchor_workspace_target(&workspace.target, resolution)?;
+                    if let WorkspaceTarget::Existing {
+                        reference: WorkspaceReference::Identifier(identity),
+                    } = &anchored
+                    {
+                        reserved_next_empty.insert(identity.clone());
+                    }
+                    anchored
+                }
+                WorkspaceTarget::Create { .. } | WorkspaceTarget::None => workspace.target.clone(),
+            };
+            resolved_targets.insert(workspace.id.clone(), target);
+        }
+
+        let ordered_action_ids = plan.ordered_action_ids().to_vec();
+        for action_id in ordered_action_ids {
+            let Some(entry) = plan.entry_mut(&action_id) else {
+                return Err(WorkstateError::new(
+                    ErrorCategory::Runtime,
+                    format!("workspace resolution returned an unknown action '{action_id}'"),
+                ));
+            };
+            let Some(workspace_id) = workspace_id_for_action(&entry.action) else {
+                continue;
+            };
+            if let Some(target) = resolved_targets.get(workspace_id) {
+                entry.action.resolved_workspace_target = Some(target.clone());
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn observe(
         &self,
         plan: &mut ExecutionPlan,
@@ -615,6 +687,25 @@ fn enrich_workspace_context(
     };
     action.resolved_workspace_target = Some(workspace.target.clone());
     action.resolved_tiling = Some(workspace.tiling);
+}
+
+fn workspace_id_for_action(action: &ActionSpec) -> Option<&WorkspaceId> {
+    action
+        .desktop_workspace
+        .as_ref()
+        .or(action.parameters.workspace_id.as_ref())
+}
+
+fn anchor_workspace_target(
+    target: &WorkspaceTarget,
+    resolution: crate::application::ports::DesktopWorkspaceResolution,
+) -> Result<WorkspaceTarget> {
+    let Some(workspace) = resolution.workspace else {
+        return Ok(target.clone());
+    };
+    Ok(WorkspaceTarget::Existing {
+        reference: WorkspaceReference::Identifier(workspace.identity),
+    })
 }
 
 pub(crate) async fn run_readiness_checks(
@@ -734,7 +825,14 @@ mod tests {
             ActionExecutionResult, ActionHandler, ActionHandlerRegistry, ActionObservation,
             ActionOutput, CancellationToken, ObservationStatus, Planner,
         },
-        domain::{ActionKind, ActionParameters, ActionSpec, EnvironmentConfig},
+        application::ports::{
+            BoxFuture, DesktopBackend, DesktopSnapshot, DesktopWindowSnapshot,
+            DesktopWorkspaceSnapshot,
+        },
+        domain::{
+            ActionKind, ActionParameters, ActionSpec, EnvironmentConfig, WorkspaceId,
+            WorkspaceReference, WorkspaceSpec, WorkspaceTarget,
+        },
         integrations::IntegrationRegistry,
     };
 
@@ -780,6 +878,17 @@ mod tests {
                     outputs: vec![ActionOutput::log(action.id.to_string())],
                 })
             })
+        }
+    }
+
+    struct StaticDesktop {
+        snapshot: DesktopSnapshot,
+    }
+
+    impl DesktopBackend for StaticDesktop {
+        fn snapshot<'a>(&'a self) -> BoxFuture<'a, crate::error::Result<DesktopSnapshot>> {
+            let snapshot = self.snapshot.clone();
+            Box::pin(async move { Ok(snapshot) })
         }
     }
 
@@ -834,6 +943,146 @@ mod tests {
             Some(super::plan::PlanClassification::AlreadyCorrect)
         );
         assert_eq!(configuration.actions.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn shared_next_empty_workspace_is_anchored_for_all_dependent_actions() {
+        let Some(mut configuration) = EnvironmentConfig::new("Personal Blog").ok() else {
+            return;
+        };
+        let Some(workspace) = WorkspaceSpec::new("shared", WorkspaceTarget::NextEmpty).ok() else {
+            return;
+        };
+        configuration.workspaces.push(workspace);
+
+        let mut first = match ActionSpec::new("first", ActionKind::OpenApplication) {
+            Ok(action) => action,
+            Err(_) => return,
+        };
+        first.parameters.application = Some("zed".to_owned());
+        first.desktop_workspace = WorkspaceId::new("shared").ok();
+
+        let mut second = match ActionSpec::new("second", ActionKind::OpenApplication) {
+            Ok(action) => action,
+            Err(_) => return,
+        };
+        second.parameters.application = Some("zed".to_owned());
+        second.desktop_workspace = WorkspaceId::new("shared").ok();
+
+        let mut tiling = match ActionSpec::new("tiling", ActionKind::ConfigureTiling) {
+            Ok(action) => action,
+            Err(_) => return,
+        };
+        tiling.desktop_workspace = WorkspaceId::new("shared").ok();
+        tiling.depends_on = vec![
+            match crate::domain::ActionId::new("first") {
+                Ok(id) => id,
+                Err(_) => return,
+            },
+            match crate::domain::ActionId::new("second") {
+                Ok(id) => id,
+                Err(_) => return,
+            },
+        ];
+        configuration.actions = vec![first, second, tiling];
+
+        let mut handlers = ActionHandlerRegistry::new();
+        assert!(
+            handlers
+                .register(FakeHandler {
+                    key: "open_application",
+                    status: ObservationStatus::RequiresChange,
+                })
+                .is_ok()
+        );
+        assert!(
+            handlers
+                .register(FakeHandler {
+                    key: "configure_tiling",
+                    status: ObservationStatus::RequiresChange,
+                })
+                .is_ok()
+        );
+        let mut integrations = IntegrationRegistry::new();
+        assert!(
+            integrations
+                .set_capability_availability(
+                    crate::platform::CapabilityId::DesktopWindows,
+                    true,
+                    None,
+                )
+                .is_ok()
+        );
+        assert!(
+            integrations
+                .set_capability_availability(
+                    crate::platform::CapabilityId::DesktopTiling,
+                    true,
+                    None,
+                )
+                .is_ok()
+        );
+
+        let planner = Planner::new(&integrations, &handlers);
+        let mut plan = match planner.build(&configuration) {
+            Ok(plan) => plan,
+            Err(_) => return,
+        };
+        let desktop = StaticDesktop {
+            snapshot: DesktopSnapshot {
+                workspaces: vec![
+                    DesktopWorkspaceSnapshot {
+                        identity: "main".to_owned(),
+                        name: Some("Main".to_owned()),
+                        position: Some(0),
+                        focused: true,
+                        tiling_enabled: Some(false),
+                    },
+                    DesktopWorkspaceSnapshot {
+                        identity: "empty-one".to_owned(),
+                        name: Some("Empty One".to_owned()),
+                        position: Some(1),
+                        focused: false,
+                        tiling_enabled: Some(false),
+                    },
+                    DesktopWorkspaceSnapshot {
+                        identity: "empty-two".to_owned(),
+                        name: Some("Empty Two".to_owned()),
+                        position: Some(2),
+                        focused: false,
+                        tiling_enabled: Some(false),
+                    },
+                ],
+                windows: vec![DesktopWindowSnapshot {
+                    identity: "terminal".to_owned(),
+                    application: Some("terminal".to_owned()),
+                    title: Some("Shell".to_owned()),
+                    project_path: None,
+                    workspace_identity: Some("main".to_owned()),
+                    focused: true,
+                }],
+            },
+        };
+
+        assert!(
+            planner
+                .resolve_workspace_targets(
+                    &mut plan,
+                    &configuration,
+                    &desktop,
+                    CancellationToken::new(),
+                )
+                .await
+                .is_ok()
+        );
+
+        let expected = Some(WorkspaceTarget::Existing {
+            reference: WorkspaceReference::Identifier("empty-one".to_owned()),
+        });
+        assert!(
+            plan.entries()
+                .all(|entry| entry.action.resolved_workspace_target == expected)
+        );
     }
 
     #[tokio::test]

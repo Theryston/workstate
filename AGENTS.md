@@ -501,6 +501,8 @@ No workspace movement
 
 The actual desktop workspace identifier resolved during execution must be persisted in runtime state when it is needed for cleanup.
 
+A configured workspace ID is a virtual workspace binding shared by every action that references it. Resolve each referenced target once during run preparation, before action observation or execution, and anchor it to the concrete desktop workspace identifier returned by the initial snapshot. Every action that references the same workspace ID must use that same concrete identifier for the entire run, including dependent actions such as tiling. Distinct `next_empty` workspace bindings must reserve their selected identities in deterministic order. Handlers must never independently re-resolve `next_empty` after setup begins.
+
 Different actions may target different desktop workspaces in the same environment. For example, Docker Desktop may remain on the current workspace, the desktop application and Android Emulator may share another workspace, and the API project may open in a third workspace.
 
 ### 8.5 Tiling
@@ -625,7 +627,6 @@ ActionKind
   open_project
   run_command
   start_service
-  create_or_select_workspace
   configure_tiling
   start_container
   start_compose
@@ -1291,7 +1292,6 @@ Run command               action name, command, working directory,
                            execution mode, dependencies
 Start service             action name, command, working directory,
                            execution mode, dependencies
-Create/select workspace   action name, workspace target, dependencies
 Configure tiling          action name, desktop workspace, tiling, dependencies
 Start container            action name, container, working directory, dependencies
 Start Compose              action name, Compose project, working directory,
@@ -1304,7 +1304,7 @@ Custom action              action name, dependencies
 
 `Open Project with Zed` is intentionally specialized. Its application is always Zed in the initial product, so the inspector must not show `Application`, `Working directory`, or `Execution mode` for this action. The project directory is configured through `Project path`, and the action may optionally target a desktop workspace.
 
-Workspace configuration is edited through the contextual workspace field of the selected action or through the `Create or select workspace` action. The inspector may offer saved workspace targets, the current workspace, a next-empty-workspace target, and a flow for linking a live COSMIC workspace. The live COSMIC picker is a modal interaction and must explain `Enter` to confirm and `Esc` to cancel. It must not reintroduce a permanent workspace pane on the editor screen.
+Workspace configuration is edited through the contextual workspace field of the selected action. The inspector may offer saved workspace targets, the current workspace, a next-empty-workspace target, and a flow for linking a live COSMIC workspace. The live COSMIC picker is a modal interaction and must explain `Enter` to confirm and `Esc` to cancel. It must not reintroduce a permanent workspace pane on the editor screen.
 
 The user must be able to add resources in any useful order and configure relationships afterward. The editor must allow the user to describe flows such as:
 

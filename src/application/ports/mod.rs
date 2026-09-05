@@ -14,7 +14,7 @@ pub use containers::ContainerBackend;
 pub use desktop::{
     DesktopBackend, DesktopEnvironmentDetector, DesktopOperationOutcome, DesktopOperationStatus,
     DesktopSnapshot, DesktopWindowSnapshot, DesktopWorkspaceResolution, DesktopWorkspaceSnapshot,
-    ensure_workspace, resolve_workspace_target,
+    ensure_workspace, resolve_workspace_target, resolve_workspace_target_with_reservations,
 };
 pub use editor::{EditorBackend, EditorOpenOutcome, EditorOperationStatus, EditorWindowSnapshot};
 pub use emulator::EmulatorBackend;

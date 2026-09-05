@@ -11,7 +11,7 @@ use crate::{
             ActionExecutionResult, ActionHandlerRegistry, ActionOutputStream, CancellationToken,
             PlanClassification, Planner, ReadinessCheckRunner,
         },
-        ports::{BoxFuture, Clock, SystemClock},
+        ports::{BoxFuture, Clock, DesktopBackend, SystemClock},
     },
     domain::{ActionId, ActionKind, EnvironmentConfig, EnvironmentSlug, ExecutionMode},
     error::{ErrorCategory, Result, WorkstateError},
@@ -225,6 +225,7 @@ impl RunRequest {
 pub struct ReconciliationEngine<'a> {
     integrations: &'a IntegrationRegistry,
     handlers: Arc<ActionHandlerRegistry>,
+    desktop_backend: Option<Arc<dyn DesktopBackend>>,
     clock: Arc<dyn Clock>,
     scheduler: Scheduler,
     observation_timeout: Duration,
@@ -253,6 +254,42 @@ impl<'a> ReconciliationEngine<'a> {
         clock: Arc<dyn Clock>,
         options: SchedulerOptions,
     ) -> Self {
+        Self::with_optional_desktop(
+            integrations,
+            handlers,
+            readiness_runner,
+            None,
+            clock,
+            options,
+        )
+    }
+
+    pub fn with_clock_and_desktop(
+        integrations: &'a IntegrationRegistry,
+        handlers: Arc<ActionHandlerRegistry>,
+        readiness_runner: Arc<dyn ReadinessCheckRunner>,
+        desktop_backend: Arc<dyn DesktopBackend>,
+        clock: Arc<dyn Clock>,
+        options: SchedulerOptions,
+    ) -> Self {
+        Self::with_optional_desktop(
+            integrations,
+            handlers,
+            readiness_runner,
+            Some(desktop_backend),
+            clock,
+            options,
+        )
+    }
+
+    fn with_optional_desktop(
+        integrations: &'a IntegrationRegistry,
+        handlers: Arc<ActionHandlerRegistry>,
+        readiness_runner: Arc<dyn ReadinessCheckRunner>,
+        desktop_backend: Option<Arc<dyn DesktopBackend>>,
+        clock: Arc<dyn Clock>,
+        options: SchedulerOptions,
+    ) -> Self {
         let observation_timeout = options.default_action_timeout;
         let scheduler = Scheduler::with_clock(
             Arc::clone(&handlers),
@@ -263,6 +300,7 @@ impl<'a> ReconciliationEngine<'a> {
         Self {
             integrations,
             handlers,
+            desktop_backend,
             clock,
             scheduler,
             observation_timeout,
@@ -311,6 +349,20 @@ impl<'a> ReconciliationEngine<'a> {
                 return Err(error);
             }
         };
+
+        if let Some(desktop_backend) = &self.desktop_backend
+            && let Err(error) = planner
+                .resolve_workspace_targets(
+                    &mut plan,
+                    configuration,
+                    desktop_backend.as_ref(),
+                    cancellation.clone(),
+                )
+                .await
+        {
+            self.emit_failure(&events, &environment, &error).await?;
+            return Err(error);
+        }
 
         if let Err(error) = planner
             .observe_with_timeout(&mut plan, cancellation.clone(), self.observation_timeout)

@@ -10,7 +10,7 @@ use crate::{
             ActionExecutionResult, ActionHandlerRegistry, ActionObservation, CancellationToken,
             ExecutionPlan, ObservationStatus, ReadinessCheckRunner, run_with_timeout,
         },
-        ports::{Clock, ConfigStore, StateStore},
+        ports::{Clock, ConfigStore, DesktopBackend, StateStore},
         reconciliation::{
             ApplicationEvent, EventSink, ExecutionObserver, ReconciliationEngine, RunReport,
             RunRequest, SchedulerOptions,
@@ -53,7 +53,9 @@ pub struct DeleteResult {
 
 pub struct LifecycleEngine<'a> {
     core: ReconciliationEngine<'a>,
+    integrations: &'a IntegrationRegistry,
     handlers: Arc<ActionHandlerRegistry>,
+    readiness_runner: Arc<dyn ReadinessCheckRunner>,
     clock: Arc<dyn Clock>,
     config_store: Arc<dyn ConfigStore>,
     state_store: Arc<dyn StateStore>,
@@ -79,12 +81,26 @@ impl<'a> LifecycleEngine<'a> {
         );
         Self {
             core,
+            integrations,
             handlers,
+            readiness_runner,
             clock,
             config_store,
             state_store,
             options,
         }
+    }
+
+    pub fn with_desktop_backend(mut self, desktop_backend: Arc<dyn DesktopBackend>) -> Self {
+        self.core = ReconciliationEngine::with_clock_and_desktop(
+            self.integrations,
+            Arc::clone(&self.handlers),
+            Arc::clone(&self.readiness_runner),
+            desktop_backend,
+            Arc::clone(&self.clock),
+            self.options.clone(),
+        );
+        self
     }
 
     pub async fn run(

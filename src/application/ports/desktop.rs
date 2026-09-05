@@ -245,6 +245,14 @@ pub fn resolve_workspace_target(
     snapshot: &DesktopSnapshot,
     target: &WorkspaceTarget,
 ) -> Result<DesktopWorkspaceResolution> {
+    resolve_workspace_target_with_reservations(snapshot, target, &BTreeSet::new())
+}
+
+pub fn resolve_workspace_target_with_reservations(
+    snapshot: &DesktopSnapshot,
+    target: &WorkspaceTarget,
+    reserved_workspace_identities: &BTreeSet<String>,
+) -> Result<DesktopWorkspaceResolution> {
     match target {
         WorkspaceTarget::None => Ok(DesktopWorkspaceResolution::none()),
         WorkspaceTarget::Current => {
@@ -342,14 +350,16 @@ pub fn resolve_workspace_target(
                     .cmp(&right.position.unwrap_or(u32::MAX))
                     .then_with(|| left.identity.cmp(&right.identity))
             });
-            let occupied = snapshot
+            let mut occupied = snapshot
                 .windows
                 .iter()
                 .filter_map(|window| window.workspace_identity.as_deref())
+                .map(str::to_owned)
                 .collect::<BTreeSet<_>>();
+            occupied.extend(reserved_workspace_identities.iter().cloned());
             workspaces
                 .into_iter()
-                .find(|workspace| !occupied.contains(workspace.identity.as_str()))
+                .find(|workspace| !occupied.contains(&workspace.identity))
                 .map(DesktopWorkspaceResolution::existing)
                 .ok_or_else(|| {
                     WorkstateError::new(

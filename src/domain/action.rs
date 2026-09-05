@@ -322,7 +322,6 @@ pub enum ActionKind {
     OpenProject,
     RunCommand,
     StartService,
-    CreateOrSelectWorkspace,
     ConfigureTiling,
     StartContainer,
     StartCompose,
@@ -339,7 +338,6 @@ impl ActionKind {
             Self::OpenProject => "open_project".to_owned(),
             Self::RunCommand => "run_command".to_owned(),
             Self::StartService => "start_service".to_owned(),
-            Self::CreateOrSelectWorkspace => "create_or_select_workspace".to_owned(),
             Self::ConfigureTiling => "configure_tiling".to_owned(),
             Self::StartContainer => "start_container".to_owned(),
             Self::StartCompose => "start_compose".to_owned(),
@@ -566,15 +564,6 @@ impl ActionSpec {
                         message: "command actions must declare run_once or background".to_owned(),
                     });
                 }
-            }
-            ActionKind::CreateOrSelectWorkspace => {
-                if self.parameters.workspace_id.is_none() {
-                    return Err(DomainError::MissingActionParameter {
-                        action_id: action_id.to_string(),
-                        parameter: "workspace_id".to_owned(),
-                    });
-                }
-                reject_execution_mode(self, action_id)?;
             }
             ActionKind::ConfigureTiling => {
                 if self.desktop_workspace.is_none() {

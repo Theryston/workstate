@@ -249,10 +249,11 @@ impl AppContext {
     }
 
     pub fn reconciliation_engine(&self, options: SchedulerOptions) -> ReconciliationEngine<'_> {
-        ReconciliationEngine::with_clock(
+        ReconciliationEngine::with_clock_and_desktop(
             self.integration_registry.as_ref(),
             Arc::clone(&self.action_handlers),
             Arc::clone(&self.readiness_runner),
+            Arc::clone(&self.desktop_backend),
             Arc::clone(&self.clock),
             options,
         )
@@ -268,6 +269,7 @@ impl AppContext {
             Arc::clone(&self.state_store),
             options,
         )
+        .with_desktop_backend(Arc::clone(&self.desktop_backend))
     }
 
     pub fn preflight(&self) -> Result<()> {
