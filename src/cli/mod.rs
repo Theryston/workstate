@@ -325,6 +325,10 @@ async fn open_environment_editor(
             EditorState::new(configuration, mode).with_workspace_observation_error(error.render())
         }
     };
+    let editor = match context.application_catalog().list() {
+        Ok(applications) => editor.with_installed_applications(applications),
+        Err(error) => editor.with_application_observation_error(error.render()),
+    };
     match run_editor(editor, options.no_color)? {
         EditorOutcome::Cancelled => Ok(()),
         EditorOutcome::Saved(configuration) => {

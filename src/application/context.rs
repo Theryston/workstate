@@ -5,6 +5,7 @@ use std::{
 
 use crate::{
     application::ports::{
+        applications::ApplicationCatalog,
         clock::{Clock, SystemClock},
         containers::ContainerBackend,
         desktop::{DesktopBackend, DesktopSnapshot},
@@ -31,7 +32,10 @@ use crate::{
     platform::{
         DesktopEnvironment, DetectedPlatform, Distribution, OperatingSystem, TerminalCapability,
     },
-    platform::{detection::RuntimePlatformDetector, linux::SystemPlatformProbe},
+    platform::{
+        detection::RuntimePlatformDetector,
+        linux::{LinuxApplicationCatalog, SystemPlatformProbe},
+    },
 };
 
 pub struct AppDependencies {
@@ -39,6 +43,7 @@ pub struct AppDependencies {
     pub state_store: Arc<dyn StateStore>,
     pub file_system: Arc<dyn FileSystem>,
     pub process_runner: Arc<dyn ProcessRunner>,
+    pub application_catalog: Arc<dyn ApplicationCatalog>,
     pub clock: Arc<dyn Clock>,
     pub platform_detector: Arc<dyn PlatformDetector>,
     pub desktop_backend: Arc<dyn DesktopBackend>,
@@ -57,6 +62,7 @@ impl AppDependencies {
             state_store: Arc::new(UnavailableBackend::new("state store")),
             file_system: Arc::new(UnavailableBackend::new("filesystem")),
             process_runner: Arc::new(UnavailableBackend::new("process runner")),
+            application_catalog: Arc::new(UnavailableBackend::new("application catalog")),
             clock: Arc::new(SystemClock),
             platform_detector: Arc::new(StaticPlatformDetector {
                 platform: platform.clone(),
@@ -76,6 +82,7 @@ pub struct AppContext {
     state_store: Arc<dyn StateStore>,
     file_system: Arc<dyn FileSystem>,
     process_runner: Arc<dyn ProcessRunner>,
+    application_catalog: Arc<dyn ApplicationCatalog>,
     clock: Arc<dyn Clock>,
     platform_detector: Arc<dyn PlatformDetector>,
     desktop_backend: Arc<dyn DesktopBackend>,
@@ -95,6 +102,7 @@ impl AppContext {
             state_store: dependencies.state_store,
             file_system: dependencies.file_system,
             process_runner: dependencies.process_runner,
+            application_catalog: dependencies.application_catalog,
             clock: dependencies.clock,
             platform_detector: dependencies.platform_detector,
             desktop_backend: dependencies.desktop_backend,
@@ -148,6 +156,12 @@ impl AppContext {
             IntegrationRegistry::from_platform(&detected_platform, &SystemPlatformProbe)?;
 
         let process_runner: Arc<dyn ProcessRunner> = Arc::new(LocalProcessRunner);
+        let application_catalog: Arc<dyn ApplicationCatalog> =
+            if detected_platform.operating_system.is_linux() {
+                Arc::new(LinuxApplicationCatalog::new())
+            } else {
+                Arc::new(UnavailableBackend::new("application catalog"))
+            };
         let supported_desktop = detected_platform.operating_system.is_linux()
             && detected_platform.distribution.is_pop_os()
             && detected_platform.desktop_environment.is_cosmic();
@@ -180,6 +194,7 @@ impl AppContext {
             state_store,
             file_system,
             process_runner,
+            application_catalog,
             clock: Arc::new(SystemClock),
             platform_detector: Arc::new(platform_detector),
             desktop_backend,
@@ -206,6 +221,10 @@ impl AppContext {
 
     pub fn process_runner(&self) -> &dyn ProcessRunner {
         self.process_runner.as_ref()
+    }
+
+    pub fn application_catalog(&self) -> &dyn ApplicationCatalog {
+        self.application_catalog.as_ref()
     }
 
     pub fn clock(&self) -> &dyn Clock {
@@ -422,6 +441,12 @@ impl ProcessRunner for UnavailableBackend {
     fn run<'a>(&'a self, _request: ProcessRequest) -> BoxFuture<'a, Result<ProcessOutput>> {
         let error = self.error(ErrorCategory::Process, "process execution");
         Box::pin(async move { Err(error) })
+    }
+}
+
+impl ApplicationCatalog for UnavailableBackend {
+    fn list(&self) -> Result<Vec<crate::application::ports::InstalledApplication>> {
+        Err(self.error(ErrorCategory::Platform, "application discovery"))
     }
 }
 

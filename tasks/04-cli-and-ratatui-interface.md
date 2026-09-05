@@ -45,6 +45,8 @@ src/ui/theme.rs
 src/ui/editor.rs
 src/ui/progress.rs
 src/ui/widgets/mod.rs
+src/application/ports/applications.rs
+src/platform/linux/applications.rs
 ~~~
 
 Add or update snapshot files in the location selected by the test setup.
@@ -157,6 +159,8 @@ Wait for condition
 Verify resource
 Custom action
 ~~~
+
+The `Open application` action must configure its `Application` field through a scrollable selector populated by the injected platform application catalog. Do not render this field as free-form text. On Linux, the selector lists visible launchable desktop entries, showing each friendly name with its desktop-entry ID as secondary detail, and persists the selected ID in the existing action parameter. If the catalog cannot be read or has no entries, show an English error and prevent arbitrary application values from being entered.
 
 Backend-specific fields may appear after the user selects a relevant action. For example, tmux details may be shown for a persistent terminal action, and Zed details may be shown for an open-project action.
 

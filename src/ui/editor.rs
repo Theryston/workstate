@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, path::PathBuf};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::{
-    application::ports::{ConfigStore, DesktopWorkspaceSnapshot, FileSystem},
+    application::ports::{ConfigStore, DesktopWorkspaceSnapshot, FileSystem, InstalledApplication},
     domain::{
         ActionId, ActionKind, ActionSpec, CommandSpec, ComposeSpec, ContainerSpec, DomainError,
         EmulatorSpec, EnvironmentConfig, ExecutionMode, ReadinessCheck, TilingPreference,
@@ -30,7 +30,6 @@ pub enum EditorField {
     EnvironmentName,
     ActionDisplayLabel,
     WorkingDirectory,
-    Application,
     ProjectPath,
     CommandProgram,
     ContainerName,
@@ -92,6 +91,7 @@ pub struct InspectorChoice {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InspectorChoiceValue {
+    Application(Option<String>),
     DesktopWorkspace(Option<WorkspaceId>),
     LinkLiveWorkspace,
     AddNextEmptyWorkspace,
@@ -212,6 +212,8 @@ enum ValidationTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorState {
     pub configuration: EnvironmentConfig,
+    pub installed_applications: Vec<InstalledApplication>,
+    pub application_observation_error: Option<String>,
     pub live_workspaces: Vec<DesktopWorkspaceSnapshot>,
     pub selected_live_workspace: Option<usize>,
     pub workspace_picker_open: bool,
@@ -243,6 +245,8 @@ impl EditorState {
         let selected_action = (!configuration.actions.is_empty()).then_some(0);
         Self {
             configuration,
+            installed_applications: Vec::new(),
+            application_observation_error: None,
             live_workspaces: Vec::new(),
             selected_live_workspace: None,
             workspace_picker_open: false,
@@ -263,6 +267,25 @@ impl EditorState {
             validation_targets: Vec::new(),
             validation_feedback_active: false,
         }
+    }
+
+    pub fn with_installed_applications(
+        mut self,
+        mut applications: Vec<InstalledApplication>,
+    ) -> Self {
+        applications.sort_by(|left, right| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        self.installed_applications = applications;
+        self
+    }
+
+    pub fn with_application_observation_error(mut self, error: impl Into<String>) -> Self {
+        self.application_observation_error = Some(error.into());
+        self
     }
 
     pub fn with_live_workspaces(mut self, mut workspaces: Vec<DesktopWorkspaceSnapshot>) -> Self {
@@ -356,11 +379,6 @@ impl EditorState {
         };
         match field {
             InspectorField::ActionLabel => action_label(action),
-            InspectorField::Application => action
-                .parameters
-                .application
-                .clone()
-                .unwrap_or_else(|| "not set".to_owned()),
             InspectorField::ProjectPath => action
                 .parameters
                 .project_path
@@ -386,6 +404,12 @@ impl EditorState {
                 .as_ref()
                 .map(|id| self.workspace_label(id))
                 .unwrap_or_else(|| "Current workspace".to_owned()),
+            InspectorField::Application => action
+                .parameters
+                .application
+                .as_ref()
+                .map(|id| self.application_label(id))
+                .unwrap_or_else(|| "not set".to_owned()),
             InspectorField::Tiling => action
                 .desktop_workspace
                 .as_ref()
@@ -1002,7 +1026,7 @@ impl EditorState {
         };
         match field {
             InspectorField::ActionLabel => self.begin_input(EditorField::ActionDisplayLabel),
-            InspectorField::Application => self.begin_input(EditorField::Application),
+            InspectorField::Application => self.open_application_picker(),
             InspectorField::ProjectPath => self.begin_input(EditorField::ProjectPath),
             InspectorField::WorkingDirectory => self.begin_input(EditorField::WorkingDirectory),
             InspectorField::Command => self.begin_input(EditorField::CommandProgram),
@@ -1060,6 +1084,48 @@ impl EditorState {
         self.inspector_picker = Some(InspectorPicker::Choices {
             field,
             title: field.label().to_owned(),
+            options,
+            selected,
+        });
+    }
+
+    fn open_application_picker(&mut self) {
+        if self.installed_applications.is_empty() {
+            self.record_notice(
+                self.application_observation_error
+                    .clone()
+                    .unwrap_or_else(|| "No installed applications were found.".to_owned()),
+            );
+            return;
+        }
+
+        let current = self
+            .selected_action_spec()
+            .and_then(|action| action.parameters.application.clone());
+        let mut options = Vec::with_capacity(self.installed_applications.len() + 1);
+        options.push(InspectorChoice {
+            label: "No application selected".to_owned(),
+            detail: Some("Clear the current application".to_owned()),
+            value: InspectorChoiceValue::Application(None),
+        });
+        options.extend(
+            self.installed_applications
+                .iter()
+                .map(|application| InspectorChoice {
+                    label: application.name.clone(),
+                    detail: Some(application.id.clone()),
+                    value: InspectorChoiceValue::Application(Some(application.id.clone())),
+                }),
+        );
+        let selected = options
+            .iter()
+            .position(|option| {
+                matches!(&option.value, InspectorChoiceValue::Application(value) if value == &current)
+            })
+            .unwrap_or(0);
+        self.inspector_picker = Some(InspectorPicker::Choices {
+            field: InspectorField::Application,
+            title: "Application".to_owned(),
             options,
             selected,
         });
@@ -1228,6 +1294,12 @@ impl EditorState {
                     return;
                 };
                 match choice.value {
+                    InspectorChoiceValue::Application(application) => {
+                        let result = self.selected_action_id().and_then(|action_id| {
+                            self.set_action_application(&action_id, application)
+                        });
+                        self.record_error(result);
+                    }
                     InspectorChoiceValue::DesktopWorkspace(workspace_id) => {
                         let result = self.set_selected_action_workspace_field(field, workspace_id);
                         self.record_error(result);
@@ -1378,11 +1450,6 @@ impl EditorState {
                 .map(|action| action.id.clone())
                 .ok_or_else(|| WorkstateError::new(ErrorCategory::Ui, "no action is selected"))
                 .and_then(|action_id| self.set_action_working_directory(&action_id, Some(value))),
-            EditorField::Application => self
-                .selected_action_spec()
-                .map(|action| action.id.clone())
-                .ok_or_else(|| WorkstateError::new(ErrorCategory::Ui, "no action is selected"))
-                .and_then(|action_id| self.set_action_application(&action_id, Some(value))),
             EditorField::ProjectPath => self
                 .selected_action_spec()
                 .map(|action| action.id.clone())
@@ -1431,10 +1498,6 @@ impl EditorState {
             EditorField::WorkingDirectory => self
                 .selected_action_spec()
                 .and_then(|action| action.working_directory.clone())
-                .unwrap_or_default(),
-            EditorField::Application => self
-                .selected_action_spec()
-                .and_then(|action| action.parameters.application.clone())
                 .unwrap_or_default(),
             EditorField::ProjectPath => self
                 .selected_action_spec()
@@ -1889,6 +1952,14 @@ impl EditorState {
             })
             .unwrap_or_else(|| workspace_id.to_string())
     }
+
+    fn application_label(&self, application_id: &str) -> String {
+        self.installed_applications
+            .iter()
+            .find(|application| application.id == application_id)
+            .map(|application| format!("{} ({})", application.name, application.id))
+            .unwrap_or_else(|| application_id.to_owned())
+    }
 }
 
 fn action_label(action: &ActionSpec) -> String {
@@ -2043,7 +2114,7 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use crate::{
-        application::ports::DesktopWorkspaceSnapshot,
+        application::ports::{DesktopWorkspaceSnapshot, InstalledApplication},
         domain::{
             ActionKind, ActionSpec, EnvironmentConfig, ExecutionMode, TilingPreference,
             WorkspaceTarget,
@@ -2400,6 +2471,48 @@ mod tests {
                 .selected_action_spec()
                 .and_then(|action| action.parameters.application.as_deref()),
             Some("zed")
+        );
+    }
+
+    #[test]
+    fn application_field_uses_a_picker_backed_by_installed_applications() {
+        let Some(configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let mut editor = EditorState::new(configuration, EditorMode::Create)
+            .with_installed_applications(vec![
+                InstalledApplication {
+                    id: "org.example.Editor".to_owned(),
+                    name: "Editor".to_owned(),
+                },
+                InstalledApplication {
+                    id: "org.example.Browser".to_owned(),
+                    name: "Browser".to_owned(),
+                },
+            ]);
+        assert!(editor.add_action_from_palette(0).is_ok());
+        editor.handle_key(KeyCode::Enter);
+        editor.handle_key(KeyCode::Down);
+        editor.handle_key(KeyCode::Enter);
+        assert!(matches!(
+            editor.inspector_picker,
+            Some(super::InspectorPicker::Choices {
+                field: super::InspectorField::Application,
+                ..
+            })
+        ));
+        editor.handle_key(KeyCode::Down);
+        editor.handle_key(KeyCode::Enter);
+
+        assert_eq!(
+            editor
+                .selected_action_spec()
+                .and_then(|action| action.parameters.application.as_deref()),
+            Some("org.example.Browser")
+        );
+        assert_eq!(
+            editor.inspector_field_value(super::InspectorField::Application),
+            "Browser (org.example.Browser)"
         );
     }
 

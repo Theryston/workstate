@@ -1,3 +1,4 @@
+pub mod applications;
 pub mod clock;
 pub mod containers;
 pub mod desktop;
@@ -9,6 +10,7 @@ pub mod platform;
 pub mod process;
 pub mod terminal;
 
+pub use applications::{ApplicationCatalog, InstalledApplication};
 pub use clock::{Clock, SystemClock};
 pub use containers::ContainerBackend;
 pub use desktop::{

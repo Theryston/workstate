@@ -455,7 +455,6 @@ Open application
 Open Project with Zed
 Run command
 Start service
-Create or select desktop workspace
 Enable desktop tiling
 Wait for condition
 Verify resource
@@ -537,6 +536,8 @@ An application action may:
 - record the window identity and ownership.
 
 For Zed, the project folder is explicit. A matching existing Zed window should be reused when it represents the requested project. A new window opened by the environment must be recorded and may be closed by `stop` only when ownership rules allow it.
+
+The `Open application` inspector field is a resource selector, never a free-form text field. The editor receives its options from the injected `ApplicationCatalog` port for the detected platform. The initial Linux implementation discovers visible, launchable `.desktop` entries from the standard user, system, Flatpak, and Snap application directories. The persisted application value is the platform-native desktop-entry ID; the editor displays the friendly application name and keeps the ID as secondary detail. If discovery is unavailable or returns no applications, the editor must show an actionable error and must not accept an arbitrary application name.
 
 ### 8.7 Command execution modes
 
@@ -1017,7 +1018,8 @@ src/
 │   │   ├── terminal.rs
 │   │   ├── containers.rs
 │   │   ├── editor.rs
-│   │   └── emulator.rs
+│   │   ├── emulator.rs
+│   │   └── applications.rs
 │   ├── planner/
 │   │   ├── mod.rs
 │   │   └── plan.rs
@@ -1057,7 +1059,8 @@ src/
 │   │   └── support.rs
 │   ├── linux/
 │   │   ├── mod.rs
-│   │   └── detector.rs
+│   │   ├── detector.rs
+│   │   └── applications.rs
 │   └── desktop/
 │       ├── mod.rs
 │       └── cosmic.rs
@@ -1176,6 +1179,7 @@ ConfigStore
 StateStore
 FileSystem
 ProcessRunner
+ApplicationCatalog
 Clock
 PlatformDetector
 DesktopBackend
