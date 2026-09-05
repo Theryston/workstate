@@ -190,7 +190,28 @@ fn is_transient_failure(output: &ProcessOutput) -> bool {
         "device offline",
         "unknown device",
         "more than one device",
+        "connection refused",
+        "could not connect",
+        "failed to connect",
+        "error: closed",
     ]
     .iter()
     .any(|marker| detail.contains(marker))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_transient_failure;
+    use crate::application::ports::ProcessOutput;
+
+    #[test]
+    fn connection_refused_during_shutdown_is_transient() {
+        let output = ProcessOutput {
+            status: Some(1),
+            stdout: Vec::new(),
+            stderr: b"error: could not connect to TCP port 5554: Connection refused".to_vec(),
+        };
+
+        assert!(is_transient_failure(&output));
+    }
 }
