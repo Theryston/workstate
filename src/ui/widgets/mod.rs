@@ -462,6 +462,10 @@ fn editor_controls(state: &EditorState) -> Vec<EditorControl> {
         {
             return vec![
                 EditorControl {
+                    key: "←→",
+                    label: "Move cursor",
+                },
+                EditorControl {
                     key: "↑↓",
                     label: "Navigate",
                 },
@@ -480,6 +484,10 @@ fn editor_controls(state: &EditorState) -> Vec<EditorControl> {
             ];
         }
         return vec![
+            EditorControl {
+                key: "←→",
+                label: "Move cursor",
+            },
             EditorControl {
                 key: "Enter",
                 label: "Apply",
@@ -760,10 +768,14 @@ fn render_input(frame: &mut Frame<'_>, input: &super::editor::TextInput, theme: 
         "Edit {} · Enter to apply · Esc to cancel",
         field_label(input.field)
     );
-    let content = Paragraph::new(input.value.clone())
-        .block(panel_block(&title, theme))
+    let block = panel_block(&title, theme);
+    let inner = block.inner(area);
+    let (display_value, cursor_column) = input_display(&input.value, input.cursor, inner.width);
+    let content = Paragraph::new(display_value)
+        .block(block)
         .style(theme.text_style());
     frame.render_widget(content, area);
+    set_input_cursor(frame, inner, 0, cursor_column);
 }
 
 fn render_path_input(
@@ -773,8 +785,7 @@ fn render_path_input(
     theme: Theme,
 ) {
     let visible_suggestions = (completion.suggestions.len().min(8) as u16).max(1);
-    let error_height = u16::from(completion.validation_error.is_some()) * 2;
-    let height = 4 + visible_suggestions + error_height;
+    let height = 4 + visible_suggestions;
     let area = centered_rect_with_height(78, height, frame.area());
     frame.render_widget(Clear, area);
 
@@ -788,24 +799,18 @@ fn render_path_input(
 
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(error_height),
-            Constraint::Min(2),
-        ])
+        .constraints([Constraint::Length(1), Constraint::Min(2)])
         .split(inner);
+    let path_label = "Path  ";
+    let path_label_width = Line::raw(path_label).width();
+    let available_width = sections[0].width.saturating_sub(path_label_width as u16);
+    let (display_value, cursor_column) = input_display(&input.value, input.cursor, available_width);
     let path = Paragraph::new(Line::from(vec![
-        Span::styled("Path  ", theme.muted_style()),
-        Span::styled(input.value.clone(), theme.text_style()),
+        Span::styled(path_label, theme.muted_style()),
+        Span::styled(display_value, theme.text_style()),
     ]));
     frame.render_widget(path, sections[0]);
-
-    if let Some(error) = &completion.validation_error {
-        let error = Paragraph::new(format!("Path error: {error}"))
-            .style(theme.error_style())
-            .wrap(Wrap { trim: true });
-        frame.render_widget(error, sections[1]);
-    }
+    set_input_cursor(frame, sections[0], path_label_width, cursor_column);
 
     let empty_message = if input.value.is_empty() {
         "Type ~/, $HOME/, or an absolute path."
@@ -840,7 +845,7 @@ fn render_path_input(
         .highlight_symbol("▸ ");
     let mut list_state = ListState::default();
     list_state.select(completion.selected);
-    frame.render_stateful_widget(list, sections[2], &mut list_state);
+    frame.render_stateful_widget(list, sections[1], &mut list_state);
 }
 
 fn panel_block(title: &str, theme: Theme) -> Block<'static> {
@@ -848,6 +853,46 @@ fn panel_block(title: &str, theme: Theme) -> Block<'static> {
         .borders(Borders::ALL)
         .border_style(theme.border_style())
         .title(Span::styled(title.to_owned(), theme.title_style()))
+}
+
+fn input_display(value: &str, cursor: usize, available_width: u16) -> (String, usize) {
+    let max_width = usize::from(available_width);
+    if max_width == 0 {
+        return (String::new(), 0);
+    }
+
+    let characters = value.chars().collect::<Vec<_>>();
+    let cursor = cursor.min(characters.len());
+    let mut start = 0;
+    let mut cursor_width = Line::raw(characters[..cursor].iter().collect::<String>()).width();
+    while cursor_width >= max_width && start < cursor {
+        cursor_width =
+            cursor_width.saturating_sub(Line::raw(characters[start].to_string()).width());
+        start += 1;
+    }
+
+    let mut display = String::new();
+    let mut display_width: usize = 0;
+    for character in &characters[start..] {
+        let character_width = Line::raw(character.to_string()).width();
+        if display_width.saturating_add(character_width) > max_width {
+            break;
+        }
+        display.push(*character);
+        display_width = display_width.saturating_add(character_width);
+    }
+
+    (display, cursor_width.min(max_width.saturating_sub(1)))
+}
+
+fn set_input_cursor(frame: &mut Frame<'_>, area: Rect, prefix_width: usize, cursor_column: usize) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let offset = prefix_width
+        .saturating_add(cursor_column)
+        .min(usize::from(area.width).saturating_sub(1));
+    frame.set_cursor_position((area.x + offset as u16, area.y));
 }
 
 fn focused_panel_block(title: &str, theme: Theme, focused: bool) -> Block<'static> {
@@ -969,7 +1014,7 @@ mod tests {
     use std::time::Duration;
 
     use crossterm::event::KeyCode;
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{Terminal, backend::TestBackend, layout::Position};
 
     use crate::domain::{
         ActionKind, ActionSpec, EnvironmentConfig, EnvironmentName, EnvironmentSlug, ExecutionMode,
@@ -1040,6 +1085,12 @@ mod tests {
                 ("q", "Exit"),
             ]
         );
+
+        state.begin_input(EditorField::ActionDisplayLabel);
+        assert_eq!(
+            control_pairs(&state),
+            vec![("←→", "Move cursor"), ("Enter", "Apply"), ("Esc", "Cancel")]
+        );
     }
 
     #[test]
@@ -1083,6 +1134,7 @@ mod tests {
         let input = TextInput {
             field: EditorField::ProjectPath,
             value: "~/Code".to_owned(),
+            cursor: 6,
             replace_on_next_char: false,
             path_completion: Some(PathInputState {
                 suggestions: vec![crate::application::ports::DirectorySuggestion {
@@ -1090,7 +1142,7 @@ mod tests {
                     value: "~/Code".to_owned(),
                 }],
                 selected: Some(0),
-                validation_error: None,
+                validation_error: Some("path does not exist".to_owned()),
             }),
         };
         let backend = TestBackend::new(80, 8);
@@ -1111,6 +1163,11 @@ mod tests {
         assert!(rendered.contains("Path"));
         assert!(rendered.contains("~/Code"));
         assert!(rendered.contains("Directories"));
+        assert!(!rendered.contains("Path error"));
+        assert_eq!(
+            terminal.get_cursor_position().ok(),
+            Some(Position::new(22, 2))
+        );
     }
 
     #[test]

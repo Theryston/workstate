@@ -183,7 +183,7 @@ Retry policy
 Cleanup policy
 ~~~
 
-Path fields must use one reusable directory-input component. It must allow the user to type or select directories, preserve forms such as ~/Projects/app and $HOME/Projects/app, show directory-only autocomplete, navigate suggestions with Up and Down, complete the selected suggestion with Tab, refresh the child directory list after a path separator, and validate the current value in real time. Enter must not apply an invalid directory. The editor consumes an injected directory catalog rather than accessing the filesystem directly, and must preserve the user's saved path representation.
+Path fields must use one reusable directory-input component. It must allow the user to type or select directories, preserve forms such as ~/Projects/app and $HOME/Projects/app, show directory-only autocomplete, navigate suggestions with Up and Down, complete the selected suggestion with Tab, refresh the child directory list after a path separator, and validate the current value in real time. Validation errors must not be rendered inside the popup. Enter must not apply an invalid directory; it must show the error in the editor footer using the standard notice flow. The editor consumes an injected directory catalog rather than accessing the filesystem directly, and must preserve the user's saved path representation. Every editable text field, including path fields, must render a visible native terminal cursor and support Left, Right, Home, End, character insertion, Backspace, and Delete.
 
 Do not use the process current directory as an implicit value.
 

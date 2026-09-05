@@ -82,6 +82,7 @@ impl InspectorField {
 pub struct TextInput {
     pub field: EditorField,
     pub value: String,
+    pub cursor: usize,
     pub replace_on_next_char: bool,
     pub path_completion: Option<PathInputState>,
 }
@@ -1467,6 +1468,37 @@ impl EditorState {
         directory_catalog: Option<&dyn DirectoryCatalog>,
     ) -> EditorAction {
         match key {
+            KeyCode::Left => {
+                let Some(input) = self.input.as_mut() else {
+                    return EditorAction::None;
+                };
+                input.replace_on_next_char = false;
+                input.cursor = input.cursor.saturating_sub(1);
+            }
+            KeyCode::Right => {
+                let Some(input) = self.input.as_mut() else {
+                    return EditorAction::None;
+                };
+                input.replace_on_next_char = false;
+                input.cursor = input
+                    .cursor
+                    .saturating_add(1)
+                    .min(input.value.chars().count());
+            }
+            KeyCode::Home => {
+                let Some(input) = self.input.as_mut() else {
+                    return EditorAction::None;
+                };
+                input.replace_on_next_char = false;
+                input.cursor = 0;
+            }
+            KeyCode::End => {
+                let Some(input) = self.input.as_mut() else {
+                    return EditorAction::None;
+                };
+                input.replace_on_next_char = false;
+                input.cursor = input.value.chars().count();
+            }
             KeyCode::Up => self.move_path_suggestion(-1),
             KeyCode::Down => self.move_path_suggestion(1),
             KeyCode::Char(character) => {
@@ -1475,9 +1507,16 @@ impl EditorState {
                 };
                 if input.replace_on_next_char {
                     input.value.clear();
+                    input.cursor = 0;
                     input.replace_on_next_char = false;
                 }
-                input.value.push(character);
+                let byte_index = input
+                    .value
+                    .char_indices()
+                    .nth(input.cursor)
+                    .map_or(input.value.len(), |(index, _)| index);
+                input.value.insert(byte_index, character);
+                input.cursor = input.cursor.saturating_add(1);
                 self.refresh_path_completion(directory_catalog);
             }
             KeyCode::Backspace => {
@@ -1485,7 +1524,40 @@ impl EditorState {
                     return EditorAction::None;
                 };
                 input.replace_on_next_char = false;
-                input.value.pop();
+                if input.cursor > 0 {
+                    let start = input
+                        .value
+                        .char_indices()
+                        .nth(input.cursor - 1)
+                        .map_or(0, |(index, _)| index);
+                    let end = input
+                        .value
+                        .char_indices()
+                        .nth(input.cursor)
+                        .map_or(input.value.len(), |(index, _)| index);
+                    input.value.replace_range(start..end, "");
+                    input.cursor -= 1;
+                }
+                self.refresh_path_completion(directory_catalog);
+            }
+            KeyCode::Delete => {
+                let Some(input) = self.input.as_mut() else {
+                    return EditorAction::None;
+                };
+                input.replace_on_next_char = false;
+                if input.cursor < input.value.chars().count() {
+                    let start = input
+                        .value
+                        .char_indices()
+                        .nth(input.cursor)
+                        .map_or(input.value.len(), |(index, _)| index);
+                    let end = input
+                        .value
+                        .char_indices()
+                        .nth(input.cursor.saturating_add(1))
+                        .map_or(input.value.len(), |(index, _)| index);
+                    input.value.replace_range(start..end, "");
+                }
                 self.refresh_path_completion(directory_catalog);
             }
             KeyCode::Tab => {
@@ -1646,9 +1718,11 @@ impl EditorState {
                 })
                 .unwrap_or_default(),
         };
+        let cursor = value.chars().count();
         self.input = Some(TextInput {
             field,
             value,
+            cursor,
             replace_on_next_char: true,
             path_completion: is_directory_field(field).then_some(PathInputState::default()),
         });
@@ -1674,6 +1748,7 @@ impl EditorState {
         };
         if let Some(input) = self.input.as_mut() {
             input.value = value;
+            input.cursor = input.value.chars().count();
             input.replace_on_next_char = false;
         }
         self.refresh_path_completion(directory_catalog);
@@ -2282,7 +2357,8 @@ mod tests {
     };
 
     use super::{
-        EditorMode, EditorPanel, EditorState, InspectorField, SaveOutcome, action_palette,
+        EditorField, EditorMode, EditorPanel, EditorState, InspectorField, SaveOutcome,
+        action_palette,
     };
 
     struct FakeDirectoryCatalog;
@@ -2770,6 +2846,10 @@ mod tests {
         );
         send_path_key(&mut editor, &catalog, KeyCode::Enter);
         assert!(editor.input.is_some());
+        assert_eq!(
+            editor.notice.as_deref(),
+            Some("Cannot apply path: path does not exist")
+        );
         send_path_key(&mut editor, &catalog, KeyCode::Backspace);
         assert!(
             editor
@@ -2787,6 +2867,36 @@ mod tests {
                 .and_then(|action| action.parameters.project_path.as_deref()),
             Some("~/Code/api")
         );
+    }
+
+    #[test]
+    fn text_fields_support_cursor_navigation_and_insertion() {
+        let Some(configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let mut editor = EditorState::new(configuration, EditorMode::Create);
+        editor.begin_input(EditorField::EnvironmentName);
+        assert_eq!(editor.input.as_ref().map(|input| input.cursor), Some(4));
+
+        editor.handle_key(KeyCode::Left);
+        editor.handle_key(KeyCode::Char('X'));
+        assert_eq!(
+            editor.input.as_ref().map(|input| input.value.as_str()),
+            Some("BloXg")
+        );
+        assert_eq!(editor.input.as_ref().map(|input| input.cursor), Some(4));
+
+        editor.handle_key(KeyCode::Backspace);
+        editor.handle_key(KeyCode::Home);
+        editor.handle_key(KeyCode::Char('A'));
+        editor.handle_key(KeyCode::Delete);
+        assert_eq!(
+            editor.input.as_ref().map(|input| input.value.as_str()),
+            Some("Alog")
+        );
+        assert_eq!(editor.input.as_ref().map(|input| input.cursor), Some(1));
+        editor.handle_key(KeyCode::End);
+        assert_eq!(editor.input.as_ref().map(|input| input.cursor), Some(4));
     }
 
     #[test]
