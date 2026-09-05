@@ -2,7 +2,7 @@
 name = "workstate"
 version = "0.1.0"
 edition = "2024"
-description = "Launch your entire work environment with one command 🚀"
+description = "⚡ One command. Your entire work environment, orchestrated!"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
