@@ -119,6 +119,66 @@ impl ProjectEditorKind {
             ),
         }
     }
+
+    fn title_suffixes(self) -> &'static [&'static str] {
+        match self {
+            Self::Zed => &["Zed"],
+            Self::VsCode => &["Visual Studio Code", "Code - OSS", "Code"],
+            Self::Cursor => &["Cursor"],
+        }
+    }
+
+    fn title_with_known_editor_suffix(self, title: &str) -> Option<String> {
+        const SEPARATORS: [&str; 4] = [" — ", " – ", " - ", ": "];
+        let title = title.trim();
+
+        for suffix in self.title_suffixes() {
+            for separator in SEPARATORS {
+                let marker = format!("{separator}{suffix}");
+                if let Some(component) = title.strip_suffix(&marker) {
+                    let component = component.trim();
+                    if !component.is_empty() {
+                        return Some(component.to_owned());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn project_title_component(self, title: &str) -> Option<String> {
+        let title = self
+            .title_with_known_editor_suffix(title)
+            .unwrap_or_else(|| title.trim().to_owned());
+        let separators = [" — ", " – ", " - ", ": "];
+        let split_index = match self {
+            Self::Zed => separators
+                .iter()
+                .filter_map(|separator| title.find(separator))
+                .min(),
+            Self::VsCode | Self::Cursor => separators
+                .iter()
+                .filter_map(|separator| title.rfind(separator).map(|index| index + separator.len()))
+                .max(),
+        };
+        let component = split_index
+            .and_then(|index| match self {
+                Self::Zed => title.get(..index),
+                Self::VsCode | Self::Cursor => title.get(index..),
+            })
+            .unwrap_or(title.as_str())
+            .trim();
+        (!component.is_empty()).then(|| component.to_owned())
+    }
+
+    fn title_matches_project_name(self, title: &str, project_name: &str) -> bool {
+        self.project_title_component(title)
+            .is_some_and(|component| component == project_name)
+    }
+
+    fn has_known_editor_suffix(self, title: &str) -> bool {
+        self.title_with_known_editor_suffix(title).is_some()
+    }
 }
 
 fn normalize_application(application: &str) -> String {
@@ -215,6 +275,88 @@ impl ZedBackend {
 
     pub const fn editor_kind(&self) -> ProjectEditorKind {
         self.editor_kind
+    }
+
+    pub fn project_path_matches(&self, window: &EditorWindowSnapshot, project_path: &Path) -> bool {
+        if !self
+            .editor_kind
+            .matches_application(window.application.as_str())
+        {
+            return false;
+        }
+        if let Some(observed_path) = window.project_path.as_deref() {
+            return self.observed_project_path_matches(observed_path, project_path);
+        }
+
+        let Some(title) = window.title.as_deref() else {
+            return false;
+        };
+        let Some(project_name) = project_path.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        if self
+            .editor_kind
+            .title_matches_project_name(title, project_name)
+        {
+            return true;
+        }
+
+        self.editor_kind.has_known_editor_suffix(title)
+            && self
+                .editor_kind
+                .project_title_component(title)
+                .and_then(|component| self.normalize_observed_project_path(Path::new(&component)))
+                .is_some_and(|observed_path| observed_path == project_path)
+    }
+
+    pub fn matching_project_window(
+        &self,
+        windows: &[EditorWindowSnapshot],
+        project_path: &Path,
+    ) -> Result<Option<EditorWindowSnapshot>> {
+        let mut matches = windows
+            .iter()
+            .filter(|window| {
+                window.project_path.is_some() && self.project_path_matches(window, project_path)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if matches.is_empty() {
+            matches = windows
+                .iter()
+                .filter(|window| {
+                    window.project_path.is_none() && self.project_path_matches(window, project_path)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+        }
+        match matches.as_slice() {
+            [] => Ok(None),
+            [window] => Ok(Some(window.clone())),
+            _ => Err(ZedError::AmbiguousProject {
+                editor: self.editor_kind.display_name().to_owned(),
+                project: project_path.display().to_string(),
+                matches: matches.len(),
+            }
+            .into_workstate()),
+        }
+    }
+
+    fn observed_project_path_matches(&self, observed: &Path, requested: &Path) -> bool {
+        if observed == requested {
+            return true;
+        }
+
+        self.normalize_observed_project_path(observed)
+            .is_some_and(|path| path == requested)
+    }
+
+    fn normalize_observed_project_path(&self, observed: &Path) -> Option<PathBuf> {
+        let expanded = self.expand_project_path(observed).ok()?;
+        self.file_system
+            .canonicalize(&expanded)
+            .ok()
+            .or(Some(expanded))
     }
 
     pub fn resolve_project_path(&self, project_path: &Path) -> Result<PathBuf> {
@@ -349,9 +491,7 @@ impl ZedBackend {
         cancellation.check()?;
         let project_path = self.resolve_project_path(&project_path)?;
         let before = self.observe_editor_projects().await?;
-        if let Some(window) =
-            matching_project(&before, &project_path, self.editor_kind.display_name())?
-        {
+        if let Some(window) = self.matching_project_window(&before, &project_path)? {
             return Ok(EditorOpenOutcome {
                 status: EditorOperationStatus::Reused,
                 window,
@@ -362,9 +502,7 @@ impl ZedBackend {
 
         let _launch_guard = self.launch_lock.lock().await;
         let before = self.observe_editor_projects().await?;
-        if let Some(window) =
-            matching_project(&before, &project_path, self.editor_kind.display_name())?
-        {
+        if let Some(window) = self.matching_project_window(&before, &project_path)? {
             return Ok(EditorOpenOutcome {
                 status: EditorOperationStatus::Reused,
                 window,
@@ -402,9 +540,7 @@ impl ZedBackend {
                     .into_workstate());
                 }
                 let observed = self.observe_editor_projects().await?;
-                if let Some(window) =
-                    matching_project(&observed, &project_path, self.editor_kind.display_name())?
-                {
+                if let Some(window) = self.matching_project_window(&observed, &project_path)? {
                     let owned = !before_ids.contains(&window.identity);
                     return Ok(EditorOpenOutcome {
                         status: if owned {
@@ -501,28 +637,6 @@ impl EditorBackend for ZedBackend {
         window_identity: &'a str,
     ) -> BoxFuture<'a, Result<crate::application::ports::DesktopOperationOutcome>> {
         Box::pin(async move { self.desktop.close_window(window_identity).await })
-    }
-}
-
-fn matching_project(
-    windows: &[EditorWindowSnapshot],
-    project_path: &Path,
-    editor_name: &str,
-) -> Result<Option<EditorWindowSnapshot>> {
-    let matches = windows
-        .iter()
-        .filter(|window| window.project_path.as_deref() == Some(project_path))
-        .cloned()
-        .collect::<Vec<_>>();
-    match matches.as_slice() {
-        [] => Ok(None),
-        [window] => Ok(Some(window.clone())),
-        _ => Err(ZedError::AmbiguousProject {
-            editor: editor_name.to_owned(),
-            project: project_path.display().to_string(),
-            matches: matches.len(),
-        }
-        .into_workstate()),
     }
 }
 

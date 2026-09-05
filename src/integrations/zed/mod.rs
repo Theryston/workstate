@@ -63,8 +63,45 @@ impl ProjectEditorHandler {
         self.editor_kind().display_name()
     }
 
+    async fn workspace_is_satisfied(
+        &self,
+        action: &ActionSpec,
+        window: &EditorWindowSnapshot,
+    ) -> Result<bool> {
+        let Some(target) = self.target_for(action) else {
+            return Ok(true);
+        };
+        if matches!(&target, WorkspaceTarget::None) {
+            return Ok(true);
+        }
+        let snapshot = self.desktop.snapshot().await?;
+        let resolution = observed_destination(&snapshot, &target)?;
+        Ok(resolution.workspace.is_some_and(|workspace| {
+            window.workspace_identity.as_deref() == Some(workspace.identity.as_str())
+        }))
+    }
+
     fn target_for(&self, action: &ActionSpec) -> Option<WorkspaceTarget> {
-        action.resolved_workspace_target.clone()
+        action
+            .resolved_workspace_target
+            .clone()
+            .or_else(|| {
+                action
+                    .parameters
+                    .workspace_id
+                    .as_ref()
+                    .map(|id| WorkspaceTarget::Existing {
+                        reference: crate::domain::WorkspaceReference::Identifier(id.to_string()),
+                    })
+            })
+            .or_else(|| {
+                action
+                    .desktop_workspace
+                    .as_ref()
+                    .map(|id| WorkspaceTarget::Existing {
+                        reference: crate::domain::WorkspaceReference::Identifier(id.to_string()),
+                    })
+            })
     }
 
     async fn observe_inner(
@@ -87,25 +124,20 @@ impl ProjectEditorHandler {
             .editor
             .resolve_project_path(std::path::Path::new(project_path))?;
         let projects = self.editor.observe_projects().await?;
-        let matches = matching_projects(&projects, &project_path);
-        if matches.len() > 1 {
-            return Err(WorkstateError::new(
-                ErrorCategory::Integration,
-                format!(
-                    "more than one {} window owns the configured project identity",
-                    self.editor_name()
-                ),
-            )
-            .with_context("project_path", project_path.display().to_string())
-            .with_context("matches", matches.len().to_string()));
-        }
-        let window = match matches.as_slice() {
-            [window] => (*window).clone(),
-            [] => {
-                let persisted_matches =
-                    matching_persisted_projects(&projects, &project_path, previous_resources);
+        let window = match self
+            .editor
+            .matching_project_window(&projects, &project_path)?
+        {
+            Some(window) => window,
+            None => {
+                let persisted_matches = matching_persisted_projects(
+                    &projects,
+                    &project_path,
+                    previous_resources,
+                    self.editor.as_ref(),
+                );
                 match persisted_matches.as_slice() {
-                    [window] => (*window).clone(),
+                    [window] => window.clone(),
                     [] => return Ok(ActionObservation::requires_change()),
                     _ => {
                         return Err(WorkstateError::new(
@@ -120,27 +152,23 @@ impl ProjectEditorHandler {
                     }
                 }
             }
-            _ => {
-                return Err(WorkstateError::new(
-                    ErrorCategory::Integration,
-                    format!(
-                        "more than one {} window owns the configured project identity",
-                        self.editor_name()
-                    ),
-                )
-                .with_context("project_path", project_path.display().to_string())
-                .with_context("matches", matches.len().to_string()));
-            }
         };
-        Ok(
-            ActionObservation::already_correct().with_resources(vec![window_record(
-                action,
-                &window,
-                OwnershipStatus::ReusedExisting,
-                true,
-                Some(&project_path),
-            )?]),
-        )
+        let record = window_record(
+            action,
+            &window,
+            OwnershipStatus::ReusedExisting,
+            true,
+            Some(&project_path),
+        )?;
+        if !self.workspace_is_satisfied(action, &window).await? {
+            return Ok(ActionObservation::requires_change()
+                .with_detail(format!(
+                    "the {} project window is not in the requested workspace",
+                    self.editor_name()
+                ))
+                .with_resources(vec![record]));
+        }
+        Ok(ActionObservation::already_correct().with_resources(vec![record]))
     }
 
     async fn observe_for_cleanup_inner(
@@ -459,7 +487,7 @@ impl ActionHandler for ProjectEditorHandler {
     }
 
     fn requires_workspace_target_for_observation(&self, _action: &ActionSpec) -> bool {
-        false
+        true
     }
 
     fn validate(&self, action: &ActionSpec) -> Result<()> {
@@ -573,21 +601,11 @@ pub fn register_editor_handler(
 
 pub type ZedProjectHandler = ProjectEditorHandler;
 
-fn matching_projects(
-    windows: &[EditorWindowSnapshot],
-    project_path: &Path,
-) -> Vec<EditorWindowSnapshot> {
-    windows
-        .iter()
-        .filter(|window| window.project_path.as_deref() == Some(project_path))
-        .cloned()
-        .collect()
-}
-
 fn matching_persisted_projects(
     windows: &[EditorWindowSnapshot],
     project_path: &Path,
     previous_resources: &[ResourceRecord],
+    editor: &ZedBackend,
 ) -> Vec<EditorWindowSnapshot> {
     let project_key = project_path.display().to_string();
     let identities = previous_resources
@@ -608,7 +626,7 @@ fn matching_persisted_projects(
             window
                 .project_path
                 .as_deref()
-                .is_none_or(|observed| observed == project_path)
+                .is_none_or(|_| editor.project_path_matches(window, project_path))
         })
         .cloned()
         .collect()

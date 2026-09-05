@@ -34,7 +34,7 @@ use workstate::{
     integrations::{
         CosmicBackend,
         cosmic::WorkspaceHandler,
-        zed::{ZedBackend, ZedCommand, ZedProjectHandler},
+        zed::{ProjectEditorKind, ZedBackend, ZedCommand, ZedProjectHandler},
     },
 };
 
@@ -622,6 +622,141 @@ async fn zed_reuses_only_a_stable_project_identity() -> TestResult {
 }
 
 #[tokio::test]
+async fn project_editors_reuse_title_matched_windows_without_project_metadata() -> TestResult {
+    let profiles = [
+        (ProjectEditorKind::Zed, "dev.zed.Zed"),
+        (ProjectEditorKind::VsCode, "com.visualstudio.code"),
+        (ProjectEditorKind::Cursor, "com.todesktop.230313mzl4w4u92"),
+    ];
+
+    for (editor_kind, application) in profiles {
+        let directory = tempdir()?;
+        let project_path = directory.path().to_path_buf();
+        let project_name = project_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("temporary project directory has no valid name")?;
+        let titles = match editor_kind {
+            ProjectEditorKind::Zed => vec![
+                project_name.to_owned(),
+                format!("{project_name} — .gitignore"),
+            ],
+            ProjectEditorKind::VsCode => vec![
+                format!("{project_name} - Visual Studio Code"),
+                format!(".env.example - {project_name} - Visual Studio Code"),
+            ],
+            ProjectEditorKind::Cursor => vec![
+                format!("{project_name} - Cursor"),
+                format!(".gitignore - {project_name} - Cursor"),
+            ],
+        };
+
+        for (index, title) in titles.into_iter().enumerate() {
+            let desktop = FakeDesktop::new(DesktopSnapshot {
+                workspaces: vec![workspace("main", "Main", 0, true, true)],
+                windows: vec![DesktopWindowSnapshot {
+                    identity: format!("{}-existing-{index}", editor_kind.display_name()),
+                    application: Some(application.to_owned()),
+                    title: Some(title),
+                    project_path: None,
+                    workspace_identity: Some("main".to_owned()),
+                    focused: false,
+                }],
+            });
+            let runner = FixtureProcessRunner::for_cosmic(&[], &[]);
+            let backend = ZedBackend::for_editor(
+                Arc::new(runner.clone()),
+                Arc::new(desktop),
+                Arc::new(LocalFileSystem),
+                editor_kind,
+            );
+
+            let outcome = backend
+                .open_project(project_path.clone(), CancellationToken::new())
+                .await?;
+
+            assert!(!outcome.owned);
+            assert_eq!(
+                outcome.status,
+                workstate::application::ports::EditorOperationStatus::Reused
+            );
+            assert!(runner.calls()?.is_empty());
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_editor_matching_requires_the_expected_application_identity() -> TestResult {
+    let directory = tempdir()?;
+    let project_path = directory.path().to_path_buf();
+    let project_name = project_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("temporary project directory has no valid name")?;
+    let desktop = FakeDesktop::new(DesktopSnapshot {
+        workspaces: vec![workspace("main", "Main", 0, true, true)],
+        windows: vec![DesktopWindowSnapshot {
+            identity: "different-app-window".to_owned(),
+            application: Some("com.example.OtherEditor".to_owned()),
+            title: Some(format!("{project_name} — Zed")),
+            project_path: None,
+            workspace_identity: Some("main".to_owned()),
+            focused: false,
+        }],
+    });
+    let runner = FixtureProcessRunner::for_zed_launch(desktop.clone(), project_path.clone());
+    let backend = ZedBackend::new(
+        Arc::new(runner.clone()),
+        Arc::new(desktop),
+        Arc::new(LocalFileSystem),
+    )
+    .with_timing(Duration::from_millis(1), Duration::from_millis(100));
+
+    let outcome = backend
+        .open_project(project_path, CancellationToken::new())
+        .await?;
+
+    assert!(outcome.owned);
+    assert_eq!(runner.calls()?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_editor_matching_normalizes_observed_home_aliases() -> TestResult {
+    let home = tempdir()?;
+    let project_path = home.path().join("Projects/blog");
+    std::fs::create_dir_all(&project_path)?;
+    let desktop = FakeDesktop::new(DesktopSnapshot {
+        workspaces: vec![workspace("main", "Main", 0, true, true)],
+        windows: vec![DesktopWindowSnapshot {
+            identity: "zed-home-alias".to_owned(),
+            application: Some("dev.zed.Zed".to_owned()),
+            title: Some("blog — Zed".to_owned()),
+            project_path: Some("$HOME/Projects/blog".to_owned()),
+            workspace_identity: Some("main".to_owned()),
+            focused: false,
+        }],
+    });
+    let runner = FixtureProcessRunner::for_cosmic(&[], &[]);
+    let backend = ZedBackend::for_editor(
+        Arc::new(runner.clone()),
+        Arc::new(desktop),
+        Arc::new(HomeOverrideFileSystem::new(home.path().to_path_buf())),
+        ProjectEditorKind::Zed,
+    );
+
+    let outcome = backend
+        .open_project(PathBuf::from("~/Projects/blog"), CancellationToken::new())
+        .await?;
+
+    assert!(!outcome.owned);
+    assert!(runner.calls()?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn zed_marks_a_new_window_owned_only_after_observation() -> TestResult {
     let directory = tempdir()?;
     let project_path = directory.path().to_path_buf();
@@ -899,7 +1034,7 @@ async fn reused_zed_windows_are_not_moved_back_after_manual_relocation() -> Test
 }
 
 #[tokio::test]
-async fn zed_observation_matches_the_project_key_across_workspaces() -> TestResult {
+async fn zed_observation_requires_placement_for_an_existing_project_window() -> TestResult {
     let directory = tempdir()?;
     let project_path = directory.path().to_path_buf();
     let desktop = FakeDesktop::new(DesktopSnapshot {
@@ -932,18 +1067,33 @@ async fn zed_observation_matches_the_project_key_across_workspaces() -> TestResu
 
     let observation = handler.observe(&action, CancellationToken::new()).await?;
 
-    assert_eq!(observation.status, ObservationStatus::AlreadyCorrect);
+    assert_eq!(observation.status, ObservationStatus::RequiresChange);
     assert_eq!(observation.resources.len(), 1);
     assert!(desktop.calls()?.is_empty());
+
+    let result = handler.apply(&action, CancellationToken::new()).await?;
+    assert!(result.changed);
+    assert_eq!(result.mutations.len(), 1);
+    assert_eq!(
+        desktop
+            .state()?
+            .window("zed-existing")
+            .and_then(|item| item.workspace_identity.clone()),
+        Some("target".to_owned())
+    );
     Ok(())
 }
 
 #[tokio::test]
-async fn reconciliation_observes_zed_before_resolving_next_empty() -> TestResult {
+async fn reconciliation_resolves_next_empty_before_observing_existing_project_placement()
+-> TestResult {
     let directory = tempdir()?;
     let project_path = directory.path().to_path_buf();
     let desktop = FakeDesktop::new(DesktopSnapshot {
-        workspaces: vec![workspace("main", "Main", 0, true, true)],
+        workspaces: vec![
+            workspace("main", "Main", 0, true, true),
+            workspace("empty", "Empty", 1, false, false),
+        ],
         windows: vec![DesktopWindowSnapshot {
             identity: "zed-existing".to_owned(),
             application: Some("dev.zed.Zed".to_owned()),
@@ -1002,7 +1152,7 @@ async fn reconciliation_observes_zed_before_resolving_next_empty() -> TestResult
 
     assert_eq!(
         plan.entries().next().map(|entry| entry.classification),
-        Some(workstate::application::planner::PlanClassification::AlreadyCorrect)
+        Some(workstate::application::planner::PlanClassification::RequiresChange)
     );
     Ok(())
 }
