@@ -4,8 +4,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::{
     application::ports::{
-        ConfigStore, DesktopWorkspaceSnapshot, DirectoryCatalog, DirectoryCompletion,
-        DirectorySuggestion, FileCatalog, FileSystem, InstalledApplication,
+        AndroidVirtualDevice, ConfigStore, DesktopWorkspaceSnapshot, DirectoryCatalog,
+        DirectoryCompletion, DirectorySuggestion, FileCatalog, FileSystem, InstalledApplication,
     },
     domain::{
         ActionId, ActionKind, ActionSpec, CommandSpec, ComposeSpec, ContainerSpec, DomainError,
@@ -74,7 +74,7 @@ impl InspectorField {
             Self::ContainerName => "Container",
             Self::ContainerImage => "Container image",
             Self::ComposeFile => "Compose file",
-            Self::EmulatorAvd => "Android virtual device",
+            Self::EmulatorAvd => "Device",
             Self::ReadinessDelay => "Readiness delay",
             Self::Dependencies => "Depends on",
         }
@@ -138,6 +138,7 @@ pub struct InspectorChoice {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InspectorChoiceValue {
     Application(Option<String>),
+    Emulator(Option<String>),
     DesktopWorkspace(Option<WorkspaceId>),
     LinkLiveWorkspace,
     AddNextEmptyWorkspace,
@@ -264,6 +265,8 @@ pub struct EditorState {
     pub configuration: EnvironmentConfig,
     pub installed_applications: Vec<InstalledApplication>,
     pub application_observation_error: Option<String>,
+    pub available_android_virtual_devices: Vec<AndroidVirtualDevice>,
+    pub android_observation_error: Option<String>,
     pub live_workspaces: Vec<DesktopWorkspaceSnapshot>,
     pub selected_live_workspace: Option<usize>,
     pub workspace_picker_open: bool,
@@ -297,6 +300,8 @@ impl EditorState {
             configuration,
             installed_applications: Vec::new(),
             application_observation_error: None,
+            available_android_virtual_devices: Vec::new(),
+            android_observation_error: None,
             live_workspaces: Vec::new(),
             selected_live_workspace: None,
             workspace_picker_open: false,
@@ -335,6 +340,25 @@ impl EditorState {
 
     pub fn with_application_observation_error(mut self, error: impl Into<String>) -> Self {
         self.application_observation_error = Some(error.into());
+        self
+    }
+
+    pub fn with_available_android_virtual_devices(
+        mut self,
+        mut devices: Vec<AndroidVirtualDevice>,
+    ) -> Self {
+        devices.sort_by(|left, right| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        self.available_android_virtual_devices = devices;
+        self
+    }
+
+    pub fn with_android_observation_error(mut self, error: impl Into<String>) -> Self {
+        self.android_observation_error = Some(error.into());
         self
     }
 
@@ -812,6 +836,11 @@ impl EditorState {
                 format!("emulator configuration is not available for action '{action_id}'"),
             ));
         }
+        if avd.trim().is_empty() {
+            action.parameters.emulator = None;
+            self.mark_dirty();
+            return Ok(());
+        }
         let emulator = action
             .parameters
             .emulator
@@ -1154,7 +1183,7 @@ impl EditorState {
                 directory_catalog,
                 file_catalog,
             ),
-            InspectorField::EmulatorAvd => self.begin_input(EditorField::EmulatorAvd),
+            InspectorField::EmulatorAvd => self.open_emulator_picker(),
             InspectorField::ReadinessDelay => self.begin_input(EditorField::ReadinessDelay),
             InspectorField::DesktopWorkspace => self.open_workspace_choice_picker(field),
             InspectorField::ExecutionMode => self.open_execution_mode_picker(),
@@ -1248,6 +1277,47 @@ impl EditorState {
         self.inspector_picker = Some(InspectorPicker::Choices {
             field: InspectorField::Application,
             title: "Application".to_owned(),
+            options,
+            selected,
+        });
+    }
+
+    fn open_emulator_picker(&mut self) {
+        if self.available_android_virtual_devices.is_empty() {
+            self.record_notice(self.android_observation_error.clone().unwrap_or_else(|| {
+                "No Android Virtual Devices were found. Create an AVD and try again.".to_owned()
+            }));
+            return;
+        }
+
+        let current = self.selected_action_spec().and_then(|action| {
+            action
+                .parameters
+                .emulator
+                .as_ref()
+                .map(|emulator| emulator.avd.clone())
+        });
+        let mut options = vec![InspectorChoice {
+            label: "No Android Virtual Device selected".to_owned(),
+            detail: Some("Leave the action unconfigured".to_owned()),
+            value: InspectorChoiceValue::Emulator(None),
+        }];
+        options.extend(self.available_android_virtual_devices.iter().map(|device| {
+            InspectorChoice {
+                label: device.name.clone(),
+                detail: Some("Android Virtual Device".to_owned()),
+                value: InspectorChoiceValue::Emulator(Some(device.name.clone())),
+            }
+        }));
+        let selected = options
+            .iter()
+            .position(|option| {
+                matches!(&option.value, InspectorChoiceValue::Emulator(value) if value == &current)
+            })
+            .unwrap_or(0);
+        self.inspector_picker = Some(InspectorPicker::Choices {
+            field: InspectorField::EmulatorAvd,
+            title: "Android Virtual Device".to_owned(),
             options,
             selected,
         });
@@ -1419,6 +1489,12 @@ impl EditorState {
                     InspectorChoiceValue::Application(application) => {
                         let result = self.selected_action_id().and_then(|action_id| {
                             self.set_action_application(&action_id, application)
+                        });
+                        self.record_error(result);
+                    }
+                    InspectorChoiceValue::Emulator(avd) => {
+                        let result = self.selected_action_id().and_then(|action_id| {
+                            self.set_action_emulator_avd(&action_id, avd.unwrap_or_default())
                         });
                         self.record_error(result);
                     }

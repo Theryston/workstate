@@ -12,7 +12,7 @@ use crate::{
         },
         use_cases,
     },
-    domain::{EnvironmentConfig, EnvironmentName, EnvironmentSlug, ExecutionMode},
+    domain::{ActionKind, EnvironmentConfig, EnvironmentName, EnvironmentSlug, ExecutionMode},
     error::{ErrorCategory, Result, WorkstateError},
     infrastructure::persistence::WorkstatePaths,
     ui::{
@@ -330,6 +330,13 @@ async fn open_environment_editor(
         Ok(applications) => editor.with_installed_applications(applications),
         Err(error) => editor.with_application_observation_error(error.render()),
     };
+    let editor = match context.emulator_backend().list_avds().await {
+        Ok(devices) => editor.with_available_android_virtual_devices(devices),
+        Err(error) => editor.with_android_observation_error(format!(
+            "Android Virtual Device discovery failed. Install the Android Emulator tools and expose 'emulator' and 'adb' on PATH.\n\n{}",
+            error.render()
+        )),
+    };
     match run_editor(
         editor,
         Some(context.directory_catalog()),
@@ -338,6 +345,7 @@ async fn open_environment_editor(
     )? {
         EditorOutcome::Cancelled => Ok(()),
         EditorOutcome::Saved(configuration) => {
+            validate_android_virtual_devices(context, &configuration).await?;
             match mode {
                 EditorMode::Create => context.config_store().create(&configuration)?,
                 EditorMode::Edit => context.config_store().save(&configuration)?,
@@ -348,6 +356,45 @@ async fn open_environment_editor(
             )
         }
     }
+}
+
+async fn validate_android_virtual_devices(
+    context: &AppContext,
+    configuration: &EnvironmentConfig,
+) -> Result<()> {
+    let android_actions = configuration
+        .actions
+        .iter()
+        .filter(|action| action.kind == ActionKind::StartAndroidEmulator)
+        .collect::<Vec<_>>();
+    if android_actions.is_empty() {
+        return Ok(());
+    }
+    let available = context.emulator_backend().list_avds().await?;
+    let available_names = available
+        .iter()
+        .map(|device| device.name.as_str())
+        .collect::<Vec<_>>();
+    for action in android_actions {
+        let Some(specification) = action.parameters.emulator.as_ref() else {
+            return Err(WorkstateError::new(
+                ErrorCategory::Domain,
+                format!("Android Emulator action '{}' is missing its AVD", action.id),
+            ));
+        };
+        if available_names.contains(&specification.avd.as_str()) {
+            continue;
+        }
+        return Err(WorkstateError::new(
+            ErrorCategory::Integration,
+            format!(
+                "Android Virtual Device '{}' selected for action '{}' is no longer available",
+                specification.avd, action.id
+            ),
+        )
+        .with_context("available_avds", available_names.join(", ")));
+    }
+    Ok(())
 }
 
 async fn stop_environment(

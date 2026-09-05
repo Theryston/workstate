@@ -5,13 +5,13 @@ use std::{
 
 use crate::{
     application::ports::{
+        android::EmulatorBackend,
         applications::ApplicationCatalog,
         clock::{Clock, SystemClock},
         containers::ContainerBackend,
         desktop::{DesktopBackend, DesktopSnapshot},
         directories::DirectoryCatalog,
         editor::EditorBackend,
-        emulator::EmulatorBackend,
         files::FileCatalog,
         filesystem::FileSystem,
         persistence::{ConfigStore, StateStore},
@@ -33,6 +33,7 @@ use crate::{
     },
     integrations::{
         CosmicBackend, DockerProcessBackend, IntegrationRegistry, TmuxProcessBackend, ZedBackend,
+        android::{AndroidBackend, AndroidTool, find_tool},
     },
     platform::{
         DesktopEnvironment, DetectedPlatform, Distribution, OperatingSystem, TerminalCapability,
@@ -178,6 +179,10 @@ impl AppContext {
 
         let process_runner: Arc<dyn ProcessRunner> = Arc::new(TokioProcessRunner);
         let platform_probe = SystemPlatformProbe;
+        let emulator_program = find_tool(&platform_probe, AndroidTool::Emulator)?
+            .unwrap_or_else(|| PathBuf::from("emulator"));
+        let adb_program =
+            find_tool(&platform_probe, AndroidTool::Adb)?.unwrap_or_else(|| PathBuf::from("adb"));
         let docker_program = platform_probe
             .executable("docker")?
             .unwrap_or_else(|| PathBuf::from("docker"));
@@ -209,40 +214,62 @@ impl AppContext {
         let supported_desktop = detected_platform.operating_system.is_linux()
             && detected_platform.distribution.is_pop_os()
             && detected_platform.desktop_environment.is_cosmic();
-        let (desktop_backend, editor_backend, action_handlers) = if supported_desktop {
-            let cosmic = Arc::new(CosmicBackend::new(Arc::clone(&process_runner)));
-            let desktop: Arc<dyn DesktopBackend> = cosmic;
-            let zed = Arc::new(ZedBackend::new(
-                Arc::clone(&process_runner),
-                Arc::clone(&desktop),
-                Arc::clone(&file_system),
-            ));
-            let mut handlers = ActionHandlerRegistry::new();
-            crate::integrations::cosmic::register_handlers(&mut handlers, Arc::clone(&desktop))?;
-            crate::integrations::zed::register_handlers(
-                &mut handlers,
-                Arc::clone(&zed),
-                Arc::clone(&desktop),
-            )?;
-            crate::integrations::command::register_handlers(
-                &mut handlers,
-                Arc::clone(&process_runner),
-                Arc::clone(&tmux_backend),
-                Arc::clone(&file_system),
-            )?;
-            crate::integrations::docker::register_handlers(
-                &mut handlers,
-                docker_process_backend.clone(),
-                Arc::clone(&file_system),
-            )?;
-            (desktop, zed as Arc<dyn EditorBackend>, Arc::new(handlers))
-        } else {
-            (
-                Arc::new(UnavailableBackend::new("desktop backend")) as Arc<dyn DesktopBackend>,
-                Arc::new(UnavailableBackend::new("editor backend")) as Arc<dyn EditorBackend>,
-                Arc::new(ActionHandlerRegistry::new()),
-            )
-        };
+        let (desktop_backend, editor_backend, emulator_backend, action_handlers) =
+            if supported_desktop {
+                let cosmic = Arc::new(CosmicBackend::new(Arc::clone(&process_runner)));
+                let desktop: Arc<dyn DesktopBackend> = cosmic;
+                let zed = Arc::new(ZedBackend::new(
+                    Arc::clone(&process_runner),
+                    Arc::clone(&desktop),
+                    Arc::clone(&file_system),
+                ));
+                let mut handlers = ActionHandlerRegistry::new();
+                crate::integrations::cosmic::register_handlers(
+                    &mut handlers,
+                    Arc::clone(&desktop),
+                )?;
+                crate::integrations::zed::register_handlers(
+                    &mut handlers,
+                    Arc::clone(&zed),
+                    Arc::clone(&desktop),
+                )?;
+                crate::integrations::command::register_handlers(
+                    &mut handlers,
+                    Arc::clone(&process_runner),
+                    Arc::clone(&tmux_backend),
+                    Arc::clone(&file_system),
+                )?;
+                crate::integrations::docker::register_handlers(
+                    &mut handlers,
+                    docker_process_backend.clone(),
+                    Arc::clone(&file_system),
+                )?;
+                let android = Arc::new(AndroidBackend::new(
+                    Arc::clone(&process_runner),
+                    Arc::clone(&desktop),
+                    emulator_program,
+                    adb_program,
+                )?);
+                crate::integrations::android::emulator::register_handlers(
+                    &mut handlers,
+                    android.clone(),
+                    Arc::clone(&desktop),
+                )?;
+                (
+                    desktop,
+                    zed as Arc<dyn EditorBackend>,
+                    android as Arc<dyn EmulatorBackend>,
+                    Arc::new(handlers),
+                )
+            } else {
+                (
+                    Arc::new(UnavailableBackend::new("desktop backend")) as Arc<dyn DesktopBackend>,
+                    Arc::new(UnavailableBackend::new("editor backend")) as Arc<dyn EditorBackend>,
+                    Arc::new(UnavailableBackend::new("emulator backend"))
+                        as Arc<dyn EmulatorBackend>,
+                    Arc::new(ActionHandlerRegistry::new()),
+                )
+            };
 
         let terminal_backend: Arc<dyn TerminalBackend> = tmux_process_backend;
         let context = Self::new(AppDependencies {
@@ -260,7 +287,7 @@ impl AppContext {
             tmux_backend,
             container_backend,
             editor_backend,
-            emulator_backend: Arc::new(UnavailableBackend::new("emulator backend")),
+            emulator_backend,
             integration_registry: Arc::new(integration_registry),
         });
         Ok(context.with_action_handlers(action_handlers))

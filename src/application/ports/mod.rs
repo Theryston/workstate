@@ -1,3 +1,4 @@
+pub mod android;
 pub mod applications;
 pub mod clock;
 pub mod containers;
@@ -14,6 +15,11 @@ pub mod process;
 pub mod terminal;
 pub mod tmux;
 
+pub use android::{
+    AndroidDeviceSnapshot, AndroidDeviceState, AndroidVirtualDevice, EmulatorActionContext,
+    EmulatorBackend, EmulatorCleanupOutcome, EmulatorEnsureOutcome, EmulatorObservation,
+    EmulatorOperationStatus, EmulatorRequest, EmulatorRuntimeSnapshot,
+};
 pub use applications::{ApplicationCatalog, InstalledApplication};
 pub use clock::{Clock, SystemClock};
 pub use containers::ContainerBackend;
@@ -32,7 +38,6 @@ pub use docker::{
     DockerPortSnapshot,
 };
 pub use editor::{EditorBackend, EditorOpenOutcome, EditorOperationStatus, EditorWindowSnapshot};
-pub use emulator::EmulatorBackend;
 pub use files::FileCatalog;
 pub use filesystem::FileSystem;
 pub use persistence::{ConfigStore, StateStore};

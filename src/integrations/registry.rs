@@ -328,7 +328,7 @@ impl IntegrationRegistry {
             ActionHandlerDescriptor::new(
                 "start_android_emulator",
                 "android",
-                [CapabilityId::AndroidEmulator],
+                [CapabilityId::AndroidEmulator, CapabilityId::Adb],
             ),
             ActionHandlerDescriptor::new("wait_for_condition", "core", []),
             ActionHandlerDescriptor::new("verify_resource", "core", []),
@@ -384,6 +384,16 @@ impl IntegrationRegistry {
                 probe
                     .executable("docker")?
                     .or(probe.executable("docker-compose")?)
+            } else if id == CapabilityId::AndroidEmulator {
+                crate::integrations::android::find_tool(
+                    probe,
+                    crate::integrations::android::AndroidTool::Emulator,
+                )?
+            } else if id == CapabilityId::Adb {
+                crate::integrations::android::find_tool(
+                    probe,
+                    crate::integrations::android::AndroidTool::Adb,
+                )?
             } else {
                 executable
                     .map(|name| probe.executable(name))

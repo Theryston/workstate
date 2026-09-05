@@ -983,7 +983,7 @@ fn field_label(field: super::editor::EditorField) -> &'static str {
         super::editor::EditorField::ContainerName => "container name",
         super::editor::EditorField::ContainerImage => "container image",
         super::editor::EditorField::ComposeFile => "Compose file",
-        super::editor::EditorField::EmulatorAvd => "Android virtual device",
+        super::editor::EditorField::EmulatorAvd => "Device",
         super::editor::EditorField::ReadinessDelay => "readiness delay in milliseconds",
     }
 }
