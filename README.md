@@ -13,7 +13,7 @@
   <a href="#-quick-start">Quick Start</a> •
   <a href="#-why-workstate">Why Workstate?</a> •
   <a href="#-features">Features</a> •
-  <a href="#-commands">Commands</a> •
+  <a href="#%EF%B8%8F-commands">Commands</a> •
   <a href="#-support">Support</a>
 </p>
 
