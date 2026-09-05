@@ -2,6 +2,7 @@ pub mod applications;
 pub mod clock;
 pub mod containers;
 pub mod desktop;
+pub mod directories;
 pub mod editor;
 pub mod emulator;
 pub mod filesystem;
@@ -18,6 +19,7 @@ pub use desktop::{
     DesktopSnapshot, DesktopWindowSnapshot, DesktopWorkspaceResolution, DesktopWorkspaceSnapshot,
     ensure_workspace, resolve_workspace_target, resolve_workspace_target_with_reservations,
 };
+pub use directories::{DirectoryCatalog, DirectoryCompletion, DirectorySuggestion};
 pub use editor::{EditorBackend, EditorOpenOutcome, EditorOperationStatus, EditorWindowSnapshot};
 pub use emulator::EmulatorBackend;
 pub use filesystem::FileSystem;

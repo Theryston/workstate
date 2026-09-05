@@ -4,6 +4,7 @@ use crossterm::event::KeyCode;
 use ratatui::{Terminal, backend::CrosstermBackend};
 
 use crate::{
+    application::ports::DirectoryCatalog,
     domain::{EnvironmentConfig, EnvironmentName, EnvironmentSlug},
     error::{ErrorCategory, Result, WorkstateError},
 };
@@ -35,13 +36,27 @@ pub fn select_environment(state: SelectorState, no_color: bool) -> Result<Option
 }
 
 pub fn edit_environment(state: EditorState, no_color: bool) -> Result<EditorOutcome> {
+    edit_environment_with_directory_catalog(state, None, no_color)
+}
+
+pub fn edit_environment_with_directory_catalog(
+    state: EditorState,
+    directory_catalog: Option<&dyn DirectoryCatalog>,
+    no_color: bool,
+) -> Result<EditorOutcome> {
     let mut session = super::event::CrosstermTerminalSession;
     run_with_terminal(&mut session, || {
         let backend = CrosstermBackend::new(io::stdout());
         let mut terminal = Terminal::new(backend)
             .map_err(|source| ui_error("could not initialize the terminal UI", source))?;
         let mut source = CrosstermEventSource::default();
-        run_editor_loop(&mut terminal, &mut source, state, no_color)
+        run_editor_loop(
+            &mut terminal,
+            &mut source,
+            state,
+            directory_catalog,
+            no_color,
+        )
     })
 }
 
@@ -137,6 +152,7 @@ fn run_editor_loop<B, S>(
     terminal: &mut Terminal<B>,
     source: &mut S,
     mut state: EditorState,
+    directory_catalog: Option<&dyn DirectoryCatalog>,
     no_color: bool,
 ) -> Result<EditorOutcome>
 where
@@ -172,7 +188,9 @@ where
                 }
                 _ => {}
             },
-            UiEvent::Key(key) => match state.handle_key_event(key) {
+            UiEvent::Key(key) => match state
+                .handle_key_event_with_directory_catalog(key, directory_catalog)
+            {
                 EditorAction::SaveRequested => {
                     if state.validate().is_ok() {
                         save_confirmation = true;
@@ -344,7 +362,7 @@ mod tests {
             return;
         };
         let mut events = FakeEvents::keys(['s', 'y']);
-        let result = run_editor_loop(&mut terminal, &mut events, state, true);
+        let result = run_editor_loop(&mut terminal, &mut events, state, None, true);
         assert_eq!(result.ok(), Some(EditorOutcome::Saved(configuration)));
     }
 

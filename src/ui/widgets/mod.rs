@@ -93,7 +93,7 @@ pub fn render_editor(frame: &mut Frame<'_>, state: &EditorState, theme: Theme) {
         render_palette(frame, state, theme);
     }
     if let Some(input) = &state.input {
-        render_input(frame, input.field, &input.value, theme);
+        render_input(frame, input, theme);
     }
     if state.delete_confirmation {
         let label = state.selected_action_spec().map(action_label);
@@ -455,6 +455,30 @@ fn render_editor_controls(state: &EditorState, theme: Theme) -> Line<'static> {
 
 fn editor_controls(state: &EditorState) -> Vec<EditorControl> {
     if state.input.is_some() {
+        if state
+            .input
+            .as_ref()
+            .is_some_and(|input| input.path_completion.is_some())
+        {
+            return vec![
+                EditorControl {
+                    key: "↑↓",
+                    label: "Navigate",
+                },
+                EditorControl {
+                    key: "Tab",
+                    label: "Complete",
+                },
+                EditorControl {
+                    key: "Enter",
+                    label: "Apply",
+                },
+                EditorControl {
+                    key: "Esc",
+                    label: "Cancel",
+                },
+            ];
+        }
         return vec![
             EditorControl {
                 key: "Enter",
@@ -725,22 +749,98 @@ fn render_palette(frame: &mut Frame<'_>, state: &EditorState, theme: Theme) {
     frame.render_stateful_widget(list, area, &mut list_state);
 }
 
-fn render_input(
-    frame: &mut Frame<'_>,
-    field: super::editor::EditorField,
-    value: &str,
-    theme: Theme,
-) {
+fn render_input(frame: &mut Frame<'_>, input: &super::editor::TextInput, theme: Theme) {
+    if let Some(path_completion) = &input.path_completion {
+        render_path_input(frame, input, path_completion, theme);
+        return;
+    }
     let area = centered_rect(70, 24, frame.area());
     frame.render_widget(Clear, area);
     let title = format!(
         "Edit {} · Enter to apply · Esc to cancel",
-        field_label(field)
+        field_label(input.field)
     );
-    let content = Paragraph::new(value.to_owned())
+    let content = Paragraph::new(input.value.clone())
         .block(panel_block(&title, theme))
         .style(theme.text_style());
     frame.render_widget(content, area);
+}
+
+fn render_path_input(
+    frame: &mut Frame<'_>,
+    input: &super::editor::TextInput,
+    completion: &super::editor::PathInputState,
+    theme: Theme,
+) {
+    let visible_suggestions = (completion.suggestions.len().min(8) as u16).max(1);
+    let error_height = u16::from(completion.validation_error.is_some()) * 2;
+    let height = 4 + visible_suggestions + error_height;
+    let area = centered_rect_with_height(78, height, frame.area());
+    frame.render_widget(Clear, area);
+
+    let title = format!(
+        "Edit {} · Tab complete · ↑↓ choose · Enter apply · Esc cancel",
+        field_label(input.field)
+    );
+    let block = panel_block(&title, theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(error_height),
+            Constraint::Min(2),
+        ])
+        .split(inner);
+    let path = Paragraph::new(Line::from(vec![
+        Span::styled("Path  ", theme.muted_style()),
+        Span::styled(input.value.clone(), theme.text_style()),
+    ]));
+    frame.render_widget(path, sections[0]);
+
+    if let Some(error) = &completion.validation_error {
+        let error = Paragraph::new(format!("Path error: {error}"))
+            .style(theme.error_style())
+            .wrap(Wrap { trim: true });
+        frame.render_widget(error, sections[1]);
+    }
+
+    let empty_message = if input.value.is_empty() {
+        "Type ~/, $HOME/, or an absolute path."
+    } else {
+        "No matching directories."
+    };
+    let items = if completion.suggestions.is_empty() {
+        vec![ListItem::new(Span::styled(
+            empty_message,
+            theme.muted_style(),
+        ))]
+    } else {
+        completion
+            .suggestions
+            .iter()
+            .map(|suggestion| {
+                ListItem::new(Line::from(vec![
+                    Span::styled(suggestion.name.clone(), theme.text_style()),
+                    Span::styled(format!("  {}", suggestion.value), theme.muted_style()),
+                ]))
+            })
+            .collect::<Vec<_>>()
+    };
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(theme.border_style())
+                .title(Span::styled("Directories", theme.title_style())),
+        )
+        .highlight_style(theme.selected_style())
+        .highlight_symbol("▸ ");
+    let mut list_state = ListState::default();
+    list_state.select(completion.selected);
+    frame.render_stateful_widget(list, sections[2], &mut list_state);
 }
 
 fn panel_block(title: &str, theme: Theme) -> Block<'static> {
@@ -850,6 +950,20 @@ fn centered_rect(width_percent: u16, height_percent: u16, area: Rect) -> Rect {
         .split(vertical[1])[1]
 }
 
+fn centered_rect_with_height(width_percent: u16, height: u16, area: Rect) -> Rect {
+    if area.width == 0 || area.height == 0 {
+        return Rect::new(area.x, area.y, 0, 0);
+    }
+    let width = (area.width.saturating_mul(width_percent) / 100).clamp(1, area.width);
+    let height = height.clamp(1, area.height);
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -864,11 +978,11 @@ mod tests {
 
     use super::{
         Theme, editor_controls, render_delete_confirmation, render_editor, render_editor_controls,
-        render_inspector, render_progress, render_selector,
+        render_input, render_inspector, render_progress, render_selector,
     };
     use crate::ui::{
         ActionProgressStatus, EnvironmentListItem, EnvironmentStatus, ProgressEvent, ProgressState,
-        SelectorState,
+        SelectorState, editor::EditorField, editor::PathInputState, editor::TextInput,
     };
     use crate::ui::{EditorMode, EditorState};
 
@@ -962,6 +1076,41 @@ mod tests {
             .collect::<String>();
         assert!(rendered.contains("s Save"));
         assert!(rendered.contains("a Add action"));
+    }
+
+    #[test]
+    fn path_input_keeps_the_field_visible_with_few_directory_suggestions() {
+        let input = TextInput {
+            field: EditorField::ProjectPath,
+            value: "~/Code".to_owned(),
+            replace_on_next_char: false,
+            path_completion: Some(PathInputState {
+                suggestions: vec![crate::application::ports::DirectorySuggestion {
+                    name: "Code".to_owned(),
+                    value: "~/Code".to_owned(),
+                }],
+                selected: Some(0),
+                validation_error: None,
+            }),
+        };
+        let backend = TestBackend::new(80, 8);
+        let Ok(mut terminal) = Terminal::new(backend) else {
+            return;
+        };
+        let result = terminal.draw(|frame| render_input(frame, &input, Theme::new(false)));
+        assert!(result.is_ok());
+        let Some(completed) = result.ok() else {
+            return;
+        };
+        let rendered = completed
+            .buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Path"));
+        assert!(rendered.contains("~/Code"));
+        assert!(rendered.contains("Directories"));
     }
 
     #[test]

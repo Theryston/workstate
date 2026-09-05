@@ -9,6 +9,7 @@ use crate::{
         clock::{Clock, SystemClock},
         containers::ContainerBackend,
         desktop::{DesktopBackend, DesktopSnapshot},
+        directories::DirectoryCatalog,
         editor::EditorBackend,
         emulator::EmulatorBackend,
         filesystem::FileSystem,
@@ -24,7 +25,7 @@ use crate::{
     domain::{EnvironmentConfig, EnvironmentSlug, RuntimeState},
     error::{ErrorCategory, Result, WorkstateError},
     infrastructure::{
-        filesystem::local::LocalFileSystem,
+        filesystem::{LocalDirectoryCatalog, local::LocalFileSystem},
         persistence::{TomlConfigStore, TomlStateStore, WorkstatePaths},
         process::LocalProcessRunner,
     },
@@ -43,6 +44,7 @@ pub struct AppDependencies {
     pub state_store: Arc<dyn StateStore>,
     pub file_system: Arc<dyn FileSystem>,
     pub process_runner: Arc<dyn ProcessRunner>,
+    pub directory_catalog: Arc<dyn DirectoryCatalog>,
     pub application_catalog: Arc<dyn ApplicationCatalog>,
     pub clock: Arc<dyn Clock>,
     pub platform_detector: Arc<dyn PlatformDetector>,
@@ -62,6 +64,7 @@ impl AppDependencies {
             state_store: Arc::new(UnavailableBackend::new("state store")),
             file_system: Arc::new(UnavailableBackend::new("filesystem")),
             process_runner: Arc::new(UnavailableBackend::new("process runner")),
+            directory_catalog: Arc::new(UnavailableBackend::new("directory catalog")),
             application_catalog: Arc::new(UnavailableBackend::new("application catalog")),
             clock: Arc::new(SystemClock),
             platform_detector: Arc::new(StaticPlatformDetector {
@@ -82,6 +85,7 @@ pub struct AppContext {
     state_store: Arc<dyn StateStore>,
     file_system: Arc<dyn FileSystem>,
     process_runner: Arc<dyn ProcessRunner>,
+    directory_catalog: Arc<dyn DirectoryCatalog>,
     application_catalog: Arc<dyn ApplicationCatalog>,
     clock: Arc<dyn Clock>,
     platform_detector: Arc<dyn PlatformDetector>,
@@ -102,6 +106,7 @@ impl AppContext {
             state_store: dependencies.state_store,
             file_system: dependencies.file_system,
             process_runner: dependencies.process_runner,
+            directory_catalog: dependencies.directory_catalog,
             application_catalog: dependencies.application_catalog,
             clock: dependencies.clock,
             platform_detector: dependencies.platform_detector,
@@ -150,6 +155,8 @@ impl AppContext {
         ));
         let state_store: Arc<dyn StateStore> =
             Arc::new(TomlStateStore::new(Arc::clone(&file_system), paths));
+        let directory_catalog: Arc<dyn DirectoryCatalog> =
+            Arc::new(LocalDirectoryCatalog::new(Arc::clone(&file_system))?);
         let platform_detector = RuntimePlatformDetector::new(SystemPlatformProbe);
         let detected_platform = platform_detector.detect()?;
         let integration_registry =
@@ -194,6 +201,7 @@ impl AppContext {
             state_store,
             file_system,
             process_runner,
+            directory_catalog,
             application_catalog,
             clock: Arc::new(SystemClock),
             platform_detector: Arc::new(platform_detector),
@@ -221,6 +229,10 @@ impl AppContext {
 
     pub fn process_runner(&self) -> &dyn ProcessRunner {
         self.process_runner.as_ref()
+    }
+
+    pub fn directory_catalog(&self) -> &dyn DirectoryCatalog {
+        self.directory_catalog.as_ref()
     }
 
     pub fn application_catalog(&self) -> &dyn ApplicationCatalog {
@@ -447,6 +459,12 @@ impl ProcessRunner for UnavailableBackend {
 impl ApplicationCatalog for UnavailableBackend {
     fn list(&self) -> Result<Vec<crate::application::ports::InstalledApplication>> {
         Err(self.error(ErrorCategory::Platform, "application discovery"))
+    }
+}
+
+impl DirectoryCatalog for UnavailableBackend {
+    fn complete(&self, _input: &str) -> Result<crate::application::ports::DirectoryCompletion> {
+        Err(self.error(ErrorCategory::Platform, "directory completion"))
     }
 }
 

@@ -8,13 +8,13 @@ pub mod theme;
 pub mod widgets;
 
 pub use app::{
-    EditorOutcome, ProgressEventSource, confirm_delete, edit_environment, select_environment,
-    show_lifecycle_progress,
+    EditorOutcome, ProgressEventSource, confirm_delete, edit_environment,
+    edit_environment_with_directory_catalog, select_environment, show_lifecycle_progress,
 };
 pub use editor::{
     ActionPaletteEntry, EditorAction, EditorField, EditorMode, EditorPanel, EditorReview,
     EditorState, InspectorChoice, InspectorChoiceValue, InspectorField, InspectorPicker,
-    SaveOutcome, TextInput, action_palette,
+    PathInputState, SaveOutcome, TextInput, action_palette,
 };
 pub use event::{
     CrosstermEventSource, CrosstermTerminalSession, EventSource, TerminalGuard, TerminalSession,

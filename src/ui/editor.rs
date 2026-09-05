@@ -3,7 +3,10 @@ use std::{collections::BTreeSet, path::PathBuf};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::{
-    application::ports::{ConfigStore, DesktopWorkspaceSnapshot, FileSystem, InstalledApplication},
+    application::ports::{
+        ConfigStore, DesktopWorkspaceSnapshot, DirectoryCatalog, DirectoryCompletion,
+        DirectorySuggestion, FileSystem, InstalledApplication,
+    },
     domain::{
         ActionId, ActionKind, ActionSpec, CommandSpec, ComposeSpec, ContainerSpec, DomainError,
         EmulatorSpec, EnvironmentConfig, ExecutionMode, ReadinessCheck, TilingPreference,
@@ -80,6 +83,45 @@ pub struct TextInput {
     pub field: EditorField,
     pub value: String,
     pub replace_on_next_char: bool,
+    pub path_completion: Option<PathInputState>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PathInputState {
+    pub suggestions: Vec<DirectorySuggestion>,
+    pub selected: Option<usize>,
+    pub validation_error: Option<String>,
+}
+
+impl PathInputState {
+    fn from_completion(completion: DirectoryCompletion, value: &str) -> Self {
+        let selected = completion
+            .suggestions
+            .iter()
+            .position(|suggestion| suggestion.value == value)
+            .or_else(|| (!completion.suggestions.is_empty()).then_some(0));
+        Self {
+            suggestions: completion.suggestions,
+            selected,
+            validation_error: completion.validation_error,
+        }
+    }
+
+    fn selected_value(&self) -> Option<String> {
+        self.selected
+            .and_then(|index| self.suggestions.get(index))
+            .map(|suggestion| suggestion.value.clone())
+    }
+
+    fn move_selection(&mut self, offset: isize) {
+        if self.suggestions.is_empty() {
+            self.selected = None;
+            return;
+        }
+        let current = self.selected.unwrap_or(0) as isize;
+        self.selected =
+            Some((current + offset).rem_euclid(self.suggestions.len() as isize) as usize);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -916,6 +958,14 @@ impl EditorState {
     }
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> EditorAction {
+        self.handle_key_event_with_directory_catalog(key, None)
+    }
+
+    pub fn handle_key_event_with_directory_catalog(
+        &mut self,
+        key: KeyEvent,
+        directory_catalog: Option<&dyn DirectoryCatalog>,
+    ) -> EditorAction {
         if self.workspace_picker_open {
             return self.handle_workspace_picker_key(key.code);
         }
@@ -923,7 +973,7 @@ impl EditorState {
             return self.handle_inspector_picker_key(key.code);
         }
         if self.input.is_some() {
-            return self.handle_input_key(key.code);
+            return self.handle_input_key(key.code, directory_catalog);
         }
         if self.palette_open {
             return self.handle_palette_key(key.code);
@@ -993,7 +1043,7 @@ impl EditorState {
                     EditorAction::None
                 }
                 EditorPanel::Inspector => {
-                    self.activate_selected_inspector_field();
+                    self.activate_selected_inspector_field(directory_catalog);
                     EditorAction::None
                 }
             },
@@ -1019,7 +1069,10 @@ impl EditorState {
         }
     }
 
-    fn activate_selected_inspector_field(&mut self) {
+    fn activate_selected_inspector_field(
+        &mut self,
+        directory_catalog: Option<&dyn DirectoryCatalog>,
+    ) {
         let Some(field) = self.selected_inspector_field() else {
             self.notice = Some("No editable fields are available for this action.".to_owned());
             return;
@@ -1027,8 +1080,13 @@ impl EditorState {
         match field {
             InspectorField::ActionLabel => self.begin_input(EditorField::ActionDisplayLabel),
             InspectorField::Application => self.open_application_picker(),
-            InspectorField::ProjectPath => self.begin_input(EditorField::ProjectPath),
-            InspectorField::WorkingDirectory => self.begin_input(EditorField::WorkingDirectory),
+            InspectorField::ProjectPath => {
+                self.begin_input_with_directory_catalog(EditorField::ProjectPath, directory_catalog)
+            }
+            InspectorField::WorkingDirectory => self.begin_input_with_directory_catalog(
+                EditorField::WorkingDirectory,
+                directory_catalog,
+            ),
             InspectorField::Command => self.begin_input(EditorField::CommandProgram),
             InspectorField::ContainerName => self.begin_input(EditorField::ContainerName),
             InspectorField::ComposeProjectName => self.begin_input(EditorField::ComposeProjectName),
@@ -1403,25 +1461,47 @@ impl EditorState {
         }
     }
 
-    fn handle_input_key(&mut self, key: KeyCode) -> EditorAction {
-        let Some(input) = &mut self.input else {
-            return EditorAction::None;
-        };
+    fn handle_input_key(
+        &mut self,
+        key: KeyCode,
+        directory_catalog: Option<&dyn DirectoryCatalog>,
+    ) -> EditorAction {
         match key {
+            KeyCode::Up => self.move_path_suggestion(-1),
+            KeyCode::Down => self.move_path_suggestion(1),
             KeyCode::Char(character) => {
+                let Some(input) = self.input.as_mut() else {
+                    return EditorAction::None;
+                };
                 if input.replace_on_next_char {
                     input.value.clear();
                     input.replace_on_next_char = false;
                 }
                 input.value.push(character);
+                self.refresh_path_completion(directory_catalog);
             }
             KeyCode::Backspace => {
+                let Some(input) = self.input.as_mut() else {
+                    return EditorAction::None;
+                };
                 input.replace_on_next_char = false;
                 input.value.pop();
+                self.refresh_path_completion(directory_catalog);
+            }
+            KeyCode::Tab => {
+                self.complete_selected_path(directory_catalog);
             }
             KeyCode::Enter => {
-                let input = self.input.take();
-                if let Some(input) = input {
+                let path_state = self.input.as_ref().and_then(|input| {
+                    input.path_completion.as_ref().map(|completion| {
+                        (input.value.is_empty(), completion.validation_error.clone())
+                    })
+                });
+                if path_state.as_ref().is_some_and(|(is_empty, _)| *is_empty) {
+                    self.record_notice("Cannot apply path: a directory is required.".to_owned());
+                } else if let Some(error) = path_state.and_then(|(_, error)| error) {
+                    self.record_notice(format!("Cannot apply path: {error}"));
+                } else if let Some(input) = self.input.take() {
                     self.commit_input(input);
                 }
             }
@@ -1489,6 +1569,14 @@ impl EditorState {
     }
 
     pub fn begin_input(&mut self, field: EditorField) {
+        self.begin_input_with_directory_catalog(field, None);
+    }
+
+    pub fn begin_input_with_directory_catalog(
+        &mut self,
+        field: EditorField,
+        directory_catalog: Option<&dyn DirectoryCatalog>,
+    ) {
         let value = match field {
             EditorField::EnvironmentName => self.configuration.name.to_string(),
             EditorField::ActionDisplayLabel => self
@@ -1562,7 +1650,67 @@ impl EditorState {
             field,
             value,
             replace_on_next_char: true,
+            path_completion: is_directory_field(field).then_some(PathInputState::default()),
         });
+        self.refresh_path_completion(directory_catalog);
+    }
+
+    fn move_path_suggestion(&mut self, offset: isize) {
+        if let Some(input) = self.input.as_mut()
+            && let Some(completion) = input.path_completion.as_mut()
+        {
+            completion.move_selection(offset);
+        }
+    }
+
+    fn complete_selected_path(&mut self, directory_catalog: Option<&dyn DirectoryCatalog>) {
+        let Some(value) = self
+            .input
+            .as_ref()
+            .and_then(|input| input.path_completion.as_ref())
+            .and_then(PathInputState::selected_value)
+        else {
+            return;
+        };
+        if let Some(input) = self.input.as_mut() {
+            input.value = value;
+            input.replace_on_next_char = false;
+        }
+        self.refresh_path_completion(directory_catalog);
+    }
+
+    fn refresh_path_completion(&mut self, directory_catalog: Option<&dyn DirectoryCatalog>) {
+        let Some(value) = self
+            .input
+            .as_ref()
+            .filter(|input| is_directory_field(input.field))
+            .map(|input| input.value.clone())
+        else {
+            return;
+        };
+        let Some(directory_catalog) = directory_catalog else {
+            return;
+        };
+        if value.is_empty() {
+            if let Some(input) = self.input.as_mut()
+                && let Some(path_completion) = input.path_completion.as_mut()
+            {
+                *path_completion = PathInputState::default();
+            }
+            return;
+        }
+        let completion = match directory_catalog.complete(&value) {
+            Ok(completion) => completion,
+            Err(error) => DirectoryCompletion {
+                suggestions: Vec::new(),
+                validation_error: Some(error.to_string()),
+            },
+        };
+        if let Some(input) = self.input.as_mut()
+            && let Some(path_completion) = input.path_completion.as_mut()
+        {
+            *path_completion = PathInputState::from_completion(completion, &value);
+        }
     }
 
     fn move_selection(&mut self, offset: isize) {
@@ -2084,6 +2232,13 @@ fn execution_mode_label(mode: ExecutionMode) -> &'static str {
     }
 }
 
+fn is_directory_field(field: EditorField) -> bool {
+    matches!(
+        field,
+        EditorField::ProjectPath | EditorField::WorkingDirectory
+    )
+}
+
 fn is_save_shortcut(key: KeyEvent) -> bool {
     if !matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S')) {
         return false;
@@ -2114,17 +2269,65 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use crate::{
-        application::ports::{DesktopWorkspaceSnapshot, InstalledApplication},
+        application::ports::{
+            DesktopWorkspaceSnapshot, DirectoryCatalog, DirectoryCompletion, DirectorySuggestion,
+            InstalledApplication,
+        },
         domain::{
             ActionKind, ActionSpec, EnvironmentConfig, ExecutionMode, TilingPreference,
             WorkspaceTarget,
         },
+        error::Result,
         infrastructure::filesystem::local::LocalFileSystem,
     };
 
     use super::{
         EditorMode, EditorPanel, EditorState, InspectorField, SaveOutcome, action_palette,
     };
+
+    struct FakeDirectoryCatalog;
+
+    impl DirectoryCatalog for FakeDirectoryCatalog {
+        fn complete(&self, input: &str) -> Result<DirectoryCompletion> {
+            let suggestions = match input {
+                "~/" => vec![
+                    DirectorySuggestion {
+                        name: "Code".to_owned(),
+                        value: "~/Code".to_owned(),
+                    },
+                    DirectorySuggestion {
+                        name: "Documents".to_owned(),
+                        value: "~/Documents".to_owned(),
+                    },
+                ],
+                "~/Code" => vec![DirectorySuggestion {
+                    name: "Code".to_owned(),
+                    value: "~/Code".to_owned(),
+                }],
+                "~/Code/" => vec![DirectorySuggestion {
+                    name: "api".to_owned(),
+                    value: "~/Code/api".to_owned(),
+                }],
+                _ => Vec::new(),
+            };
+            let validation_error = if matches!(input, "~/" | "~/Code" | "~/Code/" | "~/Code/api") {
+                None
+            } else {
+                Some("path does not exist".to_owned())
+            };
+            Ok(DirectoryCompletion {
+                suggestions,
+                validation_error,
+            })
+        }
+    }
+
+    fn send_path_key(editor: &mut EditorState, catalog: &dyn DirectoryCatalog, key: KeyCode) {
+        editor.handle_key_event_with_directory_catalog(
+            KeyEvent::new(key, KeyModifiers::NONE),
+            Some(catalog),
+        );
+    }
 
     #[test]
     fn palette_contains_the_capability_oriented_mvp_actions() {
@@ -2513,6 +2716,76 @@ mod tests {
         assert_eq!(
             editor.inspector_field_value(super::InspectorField::Application),
             "Browser (org.example.Browser)"
+        );
+    }
+
+    #[test]
+    fn directory_fields_support_navigation_completion_and_live_validation() {
+        let Some(mut configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let Some(action) = ActionSpec::new("open-project", ActionKind::OpenProject).ok() else {
+            return;
+        };
+        assert!(configuration.add_action(action).is_ok());
+        let catalog = FakeDirectoryCatalog;
+        let mut editor = EditorState::new(configuration, EditorMode::Create);
+
+        send_path_key(&mut editor, &catalog, KeyCode::Enter);
+        send_path_key(&mut editor, &catalog, KeyCode::Down);
+        send_path_key(&mut editor, &catalog, KeyCode::Enter);
+        assert!(
+            editor
+                .input
+                .as_ref()
+                .and_then(|input| input.path_completion.as_ref())
+                .and_then(|completion| completion.validation_error.as_ref())
+                .is_none()
+        );
+        send_path_key(&mut editor, &catalog, KeyCode::Enter);
+        assert!(editor.input.is_some());
+        send_path_key(&mut editor, &catalog, KeyCode::Char('~'));
+        send_path_key(&mut editor, &catalog, KeyCode::Char('/'));
+        send_path_key(&mut editor, &catalog, KeyCode::Down);
+        send_path_key(&mut editor, &catalog, KeyCode::Up);
+        send_path_key(&mut editor, &catalog, KeyCode::Tab);
+        assert_eq!(
+            editor.input.as_ref().map(|input| input.value.as_str()),
+            Some("~/Code")
+        );
+        send_path_key(&mut editor, &catalog, KeyCode::Char('/'));
+        send_path_key(&mut editor, &catalog, KeyCode::Tab);
+        assert_eq!(
+            editor.input.as_ref().map(|input| input.value.as_str()),
+            Some("~/Code/api")
+        );
+        send_path_key(&mut editor, &catalog, KeyCode::Char('x'));
+        assert!(
+            editor
+                .input
+                .as_ref()
+                .and_then(|input| input.path_completion.as_ref())
+                .and_then(|completion| completion.validation_error.as_ref())
+                .is_some()
+        );
+        send_path_key(&mut editor, &catalog, KeyCode::Enter);
+        assert!(editor.input.is_some());
+        send_path_key(&mut editor, &catalog, KeyCode::Backspace);
+        assert!(
+            editor
+                .input
+                .as_ref()
+                .and_then(|input| input.path_completion.as_ref())
+                .and_then(|completion| completion.validation_error.as_ref())
+                .is_none()
+        );
+        send_path_key(&mut editor, &catalog, KeyCode::Enter);
+        assert!(editor.input.is_none());
+        assert_eq!(
+            editor
+                .selected_action_spec()
+                .and_then(|action| action.parameters.project_path.as_deref()),
+            Some("~/Code/api")
         );
     }
 

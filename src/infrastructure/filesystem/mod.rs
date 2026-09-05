@@ -5,7 +5,10 @@ use crate::{
     error::{ErrorCategory, Result, WorkstateError},
 };
 
+pub mod directory_catalog;
 pub mod local;
+
+pub use directory_catalog::LocalDirectoryCatalog;
 
 pub struct PathResolver<'a> {
     home: PathBuf,

@@ -47,6 +47,8 @@ src/ui/progress.rs
 src/ui/widgets/mod.rs
 src/application/ports/applications.rs
 src/platform/linux/applications.rs
+src/application/ports/directories.rs
+src/infrastructure/filesystem/directory_catalog.rs
 ~~~
 
 Add or update snapshot files in the location selected by the test setup.
@@ -181,7 +183,7 @@ Retry policy
 Cleanup policy
 ~~~
 
-Path fields must allow the user to enter or select a directory. Preserve forms such as ~/Projects/app and $HOME/Projects/app. Validate the resolved path without rewriting the saved representation.
+Path fields must use one reusable directory-input component. It must allow the user to type or select directories, preserve forms such as ~/Projects/app and $HOME/Projects/app, show directory-only autocomplete, navigate suggestions with Up and Down, complete the selected suggestion with Tab, refresh the child directory list after a path separator, and validate the current value in real time. Enter must not apply an invalid directory. The editor consumes an injected directory catalog rather than accessing the filesystem directly, and must preserve the user's saved path representation.
 
 Do not use the process current directory as an implicit value.
 

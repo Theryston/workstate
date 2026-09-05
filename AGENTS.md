@@ -486,6 +486,8 @@ Resolve, expand, validate, and canonicalize paths at execution time. Do not perm
 
 Path resolution must be centralized in an injected path service or infrastructure component. Do not duplicate tilde or environment-variable expansion in individual integrations.
 
+All editor fields that accept directories must use the reusable directory-input flow. The flow must offer directory-only autocomplete, preserve the user's `~`, `$HOME`, or absolute-path representation, refresh suggestions after each path separator, support `Up` and `Down` selection, and complete the selected directory with `Tab`. It must display the current path, available directory suggestions, and an English validation error while the input is invalid. `Enter` must not commit an invalid directory value. The UI must consume the injected `DirectoryCatalog` port and must never enumerate the filesystem directly. The initial local implementation uses the shared `FileSystem` and `PathResolver`; future operating-system implementations may provide their own catalog without changing the editor.
+
 ### 8.4 Desktop workspace targets
 
 Each visual action may target one of these workspace modes:
@@ -1015,6 +1017,7 @@ src/
 │   │   ├── persistence.rs
 │   │   ├── platform.rs
 │   │   ├── desktop.rs
+│   │   ├── directories.rs
 │   │   ├── terminal.rs
 │   │   ├── containers.rs
 │   │   ├── editor.rs
@@ -1039,7 +1042,8 @@ src/
 │   ├── mod.rs
 │   ├── filesystem/
 │   │   ├── mod.rs
-│   │   └── local.rs
+│   │   ├── local.rs
+│   │   └── directory_catalog.rs
 │   ├── process/
 │   │   ├── mod.rs
 │   │   └── tokio_runner.rs
@@ -1179,6 +1183,7 @@ ConfigStore
 StateStore
 FileSystem
 ProcessRunner
+DirectoryCatalog
 ApplicationCatalog
 Clock
 PlatformDetector
