@@ -24,6 +24,19 @@ pub enum EditorOutcome {
     Cancelled,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SaveConfirmation {
+    Standard,
+    DuplicateCommand(String),
+}
+
+fn save_confirmation_for(state: &EditorState) -> SaveConfirmation {
+    state
+        .duplicate_command_warning()
+        .map(SaveConfirmation::DuplicateCommand)
+        .unwrap_or(SaveConfirmation::Standard)
+}
+
 pub fn select_environment(state: SelectorState, no_color: bool) -> Result<Option<EnvironmentSlug>> {
     let mut session = super::event::CrosstermTerminalSession;
     run_with_terminal(&mut session, || {
@@ -171,31 +184,43 @@ where
     S: EventSource,
 {
     let theme = Theme::new(!no_color);
-    let mut save_confirmation = false;
+    let mut save_confirmation = None;
     loop {
         terminal
             .draw(|frame| {
                 widgets::render_editor(frame, &state, theme);
-                if save_confirmation {
-                    widgets::render_confirmation(
-                        frame,
-                        "Save environment?",
-                        &format!("Save {}?", state.configuration.name),
-                        "y confirm · n or Esc cancel",
-                        theme,
-                    );
+                match &save_confirmation {
+                    Some(SaveConfirmation::Standard) => {
+                        widgets::render_confirmation(
+                            frame,
+                            "Save environment?",
+                            &format!("Save {}?", state.configuration.name),
+                            "y confirm · n or Esc cancel",
+                            theme,
+                        );
+                    }
+                    Some(SaveConfirmation::DuplicateCommand(message)) => {
+                        widgets::render_confirmation(
+                            frame,
+                            "Duplicate command detected",
+                            message,
+                            "y continue · n or Esc cancel",
+                            theme,
+                        );
+                    }
+                    None => {}
                 }
             })
             .map_err(|source| ui_error("could not draw the environment editor", source))?;
 
         match source.next()? {
-            UiEvent::Key(key) if save_confirmation => match key.code {
+            UiEvent::Key(key) if save_confirmation.is_some() => match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     state.validate()?;
                     return Ok(EditorOutcome::Saved(state.configuration));
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                    save_confirmation = false;
+                    save_confirmation = None;
                 }
                 _ => {}
             },
@@ -203,7 +228,7 @@ where
                 match state.handle_key_event_with_catalogs(key, directory_catalog, file_catalog) {
                     EditorAction::SaveRequested => {
                         if state.validate().is_ok() {
-                            save_confirmation = true;
+                            save_confirmation = Some(save_confirmation_for(&state));
                         }
                     }
                     EditorAction::CancelRequested => return Ok(EditorOutcome::Cancelled),

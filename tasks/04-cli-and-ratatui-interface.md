@@ -225,6 +225,8 @@ The save flow must:
 6. leave the previous file untouched if saving fails;
 7. return to the terminal cleanly.
 
+Before the confirmation is shown, inspect the valid configuration for duplicate `Run command` actions. Two or more actions are duplicates when their complete command specification, configured working directory, and execution mode are equal. Duplicate actions must remain editable and must not be rejected by domain validation. When duplicates exist, replace the generic save confirmation with a clear English warning that names the affected actions and explains that the same command will run more than once. `y` continues saving, while `n` or `Esc` cancels the save and leaves the editor open. Evaluate this warning only after an explicit save request; never render it as a live validation error while the user is editing or navigating.
+
 Canceling must be a successful no-op and must not change environment.toml.
 
 ### 10. Implement delete confirmation

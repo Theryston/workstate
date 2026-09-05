@@ -243,6 +243,14 @@ pub enum SaveOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct DuplicateCommandGroup {
+    command: CommandSpec,
+    working_directory: Option<String>,
+    execution_mode: ExecutionMode,
+    action_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ValidationTarget {
     Environment,
     Action {
@@ -962,6 +970,22 @@ impl EditorState {
             dependencies,
             valid,
         }
+    }
+
+    pub fn duplicate_command_warning(&self) -> Option<String> {
+        let group = self.duplicate_command_groups().into_iter().next()?;
+        let directory = group
+            .working_directory
+            .as_deref()
+            .unwrap_or("the default working directory");
+        let action_names = group.action_names.join(", ");
+        Some(format!(
+            "The same command '{}' is configured for actions {} in '{}' with '{}' execution mode. Are you sure you want to continue saving?",
+            group.command.display_line(),
+            action_names,
+            directory,
+            execution_mode_label(group.execution_mode),
+        ))
     }
 
     pub fn save(&mut self, store: &dyn ConfigStore, confirmed: bool) -> Result<SaveOutcome> {
@@ -2141,6 +2165,39 @@ impl EditorState {
             .unwrap_or_else(|| action_id.to_owned())
     }
 
+    fn duplicate_command_groups(&self) -> Vec<DuplicateCommandGroup> {
+        let mut groups = Vec::new();
+        for action in &self.configuration.actions {
+            let (Some(command), Some(execution_mode)) =
+                (&action.parameters.command, action.execution_mode)
+            else {
+                continue;
+            };
+            if !matches!(&action.kind, ActionKind::RunCommand) {
+                continue;
+            }
+            let group_index = groups.iter().position(|group: &DuplicateCommandGroup| {
+                group.command == *command
+                    && group.working_directory == action.working_directory
+                    && group.execution_mode == execution_mode
+            });
+            if let Some(group_index) = group_index {
+                groups[group_index].action_names.push(action_label(action));
+            } else {
+                groups.push(DuplicateCommandGroup {
+                    command: command.clone(),
+                    working_directory: action.working_directory.clone(),
+                    execution_mode,
+                    action_names: vec![action_label(action)],
+                });
+            }
+        }
+        groups
+            .into_iter()
+            .filter(|group| group.action_names.len() > 1)
+            .collect()
+    }
+
     fn selected_action_id(&self) -> Result<ActionId> {
         self.selected_action_spec()
             .map(|action| action.id.clone())
@@ -2484,8 +2541,8 @@ mod tests {
             FileCatalog, InstalledApplication,
         },
         domain::{
-            ActionKind, ActionSpec, EnvironmentConfig, ExecutionMode, TilingPreference,
-            WorkspaceTarget,
+            ActionKind, ActionSpec, CommandSpec, EnvironmentConfig, ExecutionMode,
+            TilingPreference, WorkspaceTarget,
         },
         error::Result,
         infrastructure::filesystem::local::LocalFileSystem,
@@ -2757,6 +2814,70 @@ mod tests {
         );
         assert_eq!(result.ok(), Some(SaveOutcome::ConfirmationRequired));
         assert_eq!(editor.panel, EditorPanel::Actions);
+    }
+
+    #[test]
+    fn duplicate_command_warning_matches_command_directory_and_execution_mode() {
+        let Some(mut configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let Some(mut first) = ActionSpec::new("install-api", ActionKind::RunCommand).ok() else {
+            return;
+        };
+        first.display_label = Some("Install API dependencies".to_owned());
+        first.working_directory = Some("~/code/notefinder/notefinder-api".to_owned());
+        first.execution_mode = Some(ExecutionMode::RunOnce);
+        first.parameters.command = Some(CommandSpec {
+            program: "bun".to_owned(),
+            arguments: vec!["i".to_owned()],
+            shell: false,
+            environment: Default::default(),
+        });
+        let mut second = first.clone();
+        second.id = match crate::domain::ActionId::new("install-api-again") {
+            Ok(id) => id,
+            Err(_) => return,
+        };
+        second.display_label = Some("Install API dependencies again".to_owned());
+        assert!(configuration.add_action(first).is_ok());
+        assert!(configuration.add_action(second).is_ok());
+        let mut editor = EditorState::new(configuration, EditorMode::Create);
+
+        let warning = editor.duplicate_command_warning();
+        assert!(warning.is_some());
+        assert!(warning.as_deref().is_some_and(|message| {
+            message.contains("Install API dependencies")
+                && message.contains("bun i")
+                && message.contains("run once")
+        }));
+
+        if let Some(action) = editor.configuration.actions.get_mut(1) {
+            action.execution_mode = Some(ExecutionMode::Background);
+        } else {
+            return;
+        }
+        assert!(editor.duplicate_command_warning().is_none());
+
+        if let Some(action) = editor.configuration.actions.get_mut(1) {
+            action.execution_mode = Some(ExecutionMode::RunOnce);
+            action.working_directory = Some("~/code/notefinder/notefinder-app".to_owned());
+        } else {
+            return;
+        }
+        assert!(editor.duplicate_command_warning().is_none());
+
+        if let Some(action) = editor.configuration.actions.get_mut(1) {
+            action.working_directory = Some("~/code/notefinder/notefinder-api".to_owned());
+            action.parameters.command = Some(CommandSpec {
+                program: "bun".to_owned(),
+                arguments: vec!["install".to_owned()],
+                shell: false,
+                environment: Default::default(),
+            });
+        } else {
+            return;
+        }
+        assert!(editor.duplicate_command_warning().is_none());
     }
 
     #[test]
