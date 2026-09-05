@@ -6,9 +6,11 @@ use crate::{
 };
 
 pub mod directory_catalog;
+pub mod file_catalog;
 pub mod local;
 
 pub use directory_catalog::LocalDirectoryCatalog;
+pub use file_catalog::LocalFileCatalog;
 
 pub struct PathResolver<'a> {
     home: PathBuf,

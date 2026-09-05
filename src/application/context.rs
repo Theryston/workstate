@@ -12,6 +12,7 @@ use crate::{
         directories::DirectoryCatalog,
         editor::EditorBackend,
         emulator::EmulatorBackend,
+        files::FileCatalog,
         filesystem::FileSystem,
         persistence::{ConfigStore, StateStore},
         platform::{PlatformDetector, PlatformProbe},
@@ -26,7 +27,7 @@ use crate::{
     domain::{EnvironmentConfig, EnvironmentSlug, RuntimeState},
     error::{ErrorCategory, Result, WorkstateError},
     infrastructure::{
-        filesystem::{LocalDirectoryCatalog, local::LocalFileSystem},
+        filesystem::{LocalDirectoryCatalog, LocalFileCatalog, local::LocalFileSystem},
         persistence::{TomlConfigStore, TomlStateStore, WorkstatePaths},
         process::TokioProcessRunner,
     },
@@ -48,6 +49,7 @@ pub struct AppDependencies {
     pub file_system: Arc<dyn FileSystem>,
     pub process_runner: Arc<dyn ProcessRunner>,
     pub directory_catalog: Arc<dyn DirectoryCatalog>,
+    pub file_catalog: Arc<dyn FileCatalog>,
     pub application_catalog: Arc<dyn ApplicationCatalog>,
     pub clock: Arc<dyn Clock>,
     pub platform_detector: Arc<dyn PlatformDetector>,
@@ -69,6 +71,7 @@ impl AppDependencies {
             file_system: Arc::new(UnavailableBackend::new("filesystem")),
             process_runner: Arc::new(UnavailableBackend::new("process runner")),
             directory_catalog: Arc::new(UnavailableBackend::new("directory catalog")),
+            file_catalog: Arc::new(UnavailableBackend::new("file catalog")),
             application_catalog: Arc::new(UnavailableBackend::new("application catalog")),
             clock: Arc::new(SystemClock),
             platform_detector: Arc::new(StaticPlatformDetector {
@@ -91,6 +94,7 @@ pub struct AppContext {
     file_system: Arc<dyn FileSystem>,
     process_runner: Arc<dyn ProcessRunner>,
     directory_catalog: Arc<dyn DirectoryCatalog>,
+    file_catalog: Arc<dyn FileCatalog>,
     application_catalog: Arc<dyn ApplicationCatalog>,
     clock: Arc<dyn Clock>,
     platform_detector: Arc<dyn PlatformDetector>,
@@ -113,6 +117,7 @@ impl AppContext {
             file_system: dependencies.file_system,
             process_runner: dependencies.process_runner,
             directory_catalog: dependencies.directory_catalog,
+            file_catalog: dependencies.file_catalog,
             application_catalog: dependencies.application_catalog,
             clock: dependencies.clock,
             platform_detector: dependencies.platform_detector,
@@ -164,6 +169,8 @@ impl AppContext {
             Arc::new(TomlStateStore::new(Arc::clone(&file_system), paths));
         let directory_catalog: Arc<dyn DirectoryCatalog> =
             Arc::new(LocalDirectoryCatalog::new(Arc::clone(&file_system))?);
+        let file_catalog: Arc<dyn FileCatalog> =
+            Arc::new(LocalFileCatalog::new(Arc::clone(&file_system))?);
         let platform_detector = RuntimePlatformDetector::new(SystemPlatformProbe);
         let detected_platform = platform_detector.detect()?;
         let integration_registry =
@@ -244,6 +251,7 @@ impl AppContext {
             file_system,
             process_runner,
             directory_catalog,
+            file_catalog,
             application_catalog,
             clock: Arc::new(SystemClock),
             platform_detector: Arc::new(platform_detector),
@@ -276,6 +284,10 @@ impl AppContext {
 
     pub fn directory_catalog(&self) -> &dyn DirectoryCatalog {
         self.directory_catalog.as_ref()
+    }
+
+    pub fn file_catalog(&self) -> &dyn FileCatalog {
+        self.file_catalog.as_ref()
     }
 
     pub fn application_catalog(&self) -> &dyn ApplicationCatalog {
@@ -435,6 +447,10 @@ impl FileSystem for UnavailableBackend {
         Err(self.error(ErrorCategory::Persistence, "directory listing"))
     }
 
+    fn list_files(&self, _path: &Path) -> Result<Vec<PathBuf>> {
+        Err(self.error(ErrorCategory::Persistence, "file listing"))
+    }
+
     fn read(&self, _path: &Path) -> Result<Vec<u8>> {
         Err(self.error(ErrorCategory::Persistence, "file read"))
     }
@@ -457,6 +473,16 @@ impl FileSystem for UnavailableBackend {
 
     fn remove(&self, _path: &Path) -> Result<()> {
         Err(self.error(ErrorCategory::Persistence, "path removal"))
+    }
+}
+
+impl FileCatalog for UnavailableBackend {
+    fn complete_yaml(
+        &self,
+        _working_directory: &str,
+        _input: &str,
+    ) -> Result<crate::application::ports::DirectoryCompletion> {
+        Err(self.error(ErrorCategory::Persistence, "YAML file completion"))
     }
 }
 

@@ -56,6 +56,24 @@ impl FileSystem for LocalFileSystem {
         Ok(directories)
     }
 
+    fn list_files(&self, path: &Path) -> Result<Vec<PathBuf>> {
+        let entries = fs::read_dir(path).map_err(|error| io_error("listing files", path, error))?;
+        let mut files = Vec::new();
+
+        for entry in entries {
+            let entry = entry.map_err(|error| io_error("reading file entry", path, error))?;
+            let entry_type = entry
+                .file_type()
+                .map_err(|error| io_error("reading file entry type", path, error))?;
+            if entry_type.is_file() {
+                files.push(entry.path());
+            }
+        }
+
+        files.sort();
+        Ok(files)
+    }
+
     fn read(&self, path: &Path) -> Result<Vec<u8>> {
         fs::read(path).map_err(|error| io_error("reading file", path, error))
     }

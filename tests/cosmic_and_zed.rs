@@ -78,6 +78,10 @@ impl FileSystem for HomeOverrideFileSystem {
         self.local.list_directories(path)
     }
 
+    fn list_files(&self, path: &Path) -> Result<Vec<PathBuf>> {
+        self.local.list_files(path)
+    }
+
     fn read(&self, path: &Path) -> Result<Vec<u8>> {
         self.local.read(path)
     }

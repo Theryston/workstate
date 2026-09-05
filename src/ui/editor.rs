@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::{
     application::ports::{
         ConfigStore, DesktopWorkspaceSnapshot, DirectoryCatalog, DirectoryCompletion,
-        DirectorySuggestion, FileSystem, InstalledApplication,
+        DirectorySuggestion, FileCatalog, FileSystem, InstalledApplication,
     },
     domain::{
         ActionId, ActionKind, ActionSpec, CommandSpec, ComposeSpec, ContainerSpec, DomainError,
@@ -37,8 +37,7 @@ pub enum EditorField {
     CommandProgram,
     ContainerName,
     ContainerImage,
-    ComposeProjectName,
-    ComposeFiles,
+    ComposeFile,
     EmulatorAvd,
     ReadinessDelay,
 }
@@ -55,8 +54,7 @@ pub enum InspectorField {
     Tiling,
     ContainerName,
     ContainerImage,
-    ComposeProjectName,
-    ComposeFiles,
+    ComposeFile,
     EmulatorAvd,
     ReadinessDelay,
     Dependencies,
@@ -75,8 +73,7 @@ impl InspectorField {
             Self::Tiling => "Tiling",
             Self::ContainerName => "Container",
             Self::ContainerImage => "Container image",
-            Self::ComposeProjectName => "Compose project",
-            Self::ComposeFiles => "Compose files",
+            Self::ComposeFile => "Compose file",
             Self::EmulatorAvd => "Android virtual device",
             Self::ReadinessDelay => "Readiness delay",
             Self::Dependencies => "Depends on",
@@ -118,10 +115,6 @@ impl PathInputState {
         self.selected
             .and_then(|index| self.suggestions.get(index))
             .map(|suggestion| suggestion.value.clone())
-    }
-
-    fn selected_value_for_navigation(&self) -> Option<String> {
-        self.selected_value().map(append_directory_separator)
     }
 
     fn move_selection(&mut self, offset: isize) {
@@ -400,9 +393,8 @@ impl EditorState {
                 ]);
             }
             ActionKind::StartCompose => fields.extend([
-                InspectorField::ComposeProjectName,
-                InspectorField::ComposeFiles,
                 InspectorField::WorkingDirectory,
+                InspectorField::ComposeFile,
             ]),
             ActionKind::StartAndroidEmulator => {
                 fields.extend([
@@ -484,18 +476,11 @@ impl EditorState {
                 .as_ref()
                 .and_then(|container| container.image.clone())
                 .unwrap_or_else(|| "not set".to_owned()),
-            InspectorField::ComposeProjectName => action
+            InspectorField::ComposeFile => action
                 .parameters
                 .compose
                 .as_ref()
-                .and_then(|compose| compose.project_name.clone())
-                .unwrap_or_else(|| "not set".to_owned()),
-            InspectorField::ComposeFiles => action
-                .parameters
-                .compose
-                .as_ref()
-                .map(|compose| compose.files.join(", "))
-                .filter(|files| !files.is_empty())
+                .and_then(|compose| compose.compose_file.clone())
                 .unwrap_or_else(|| "not set".to_owned()),
             InspectorField::EmulatorAvd => action
                 .parameters
@@ -789,11 +774,7 @@ impl EditorState {
         Ok(())
     }
 
-    pub fn set_action_compose_project_name(
-        &mut self,
-        action_id: &ActionId,
-        project_name: String,
-    ) -> Result<()> {
+    pub fn set_action_compose_file(&mut self, action_id: &ActionId, file: String) -> Result<()> {
         let action = self.action_mut(action_id)?;
         if !matches!(&action.kind, ActionKind::StartCompose) {
             return Err(WorkstateError::new(
@@ -805,42 +786,12 @@ impl EditorState {
             .parameters
             .compose
             .get_or_insert_with(|| ComposeSpec {
-                project_name: None,
-                files: Vec::new(),
+                compose_file: None,
                 services: Vec::new(),
                 up_command: None,
                 down_command: None,
             });
-        compose.project_name = Some(project_name);
-        self.mark_dirty();
-        Ok(())
-    }
-
-    pub fn set_action_compose_files(&mut self, action_id: &ActionId, value: String) -> Result<()> {
-        let action = self.action_mut(action_id)?;
-        if !matches!(&action.kind, ActionKind::StartCompose) {
-            return Err(WorkstateError::new(
-                ErrorCategory::Ui,
-                format!("Compose configuration is not available for action '{action_id}'"),
-            ));
-        }
-        let files = value
-            .split(',')
-            .map(str::trim)
-            .filter(|file| !file.is_empty())
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        let compose = action
-            .parameters
-            .compose
-            .get_or_insert_with(|| ComposeSpec {
-                project_name: None,
-                files: Vec::new(),
-                services: Vec::new(),
-                up_command: None,
-                down_command: None,
-            });
-        compose.files = files;
+        compose.compose_file = (!file.trim().is_empty()).then(|| file.trim().to_owned());
         self.mark_dirty();
         Ok(())
     }
@@ -1040,6 +991,15 @@ impl EditorState {
         key: KeyEvent,
         directory_catalog: Option<&dyn DirectoryCatalog>,
     ) -> EditorAction {
+        self.handle_key_event_with_catalogs(key, directory_catalog, None)
+    }
+
+    pub fn handle_key_event_with_catalogs(
+        &mut self,
+        key: KeyEvent,
+        directory_catalog: Option<&dyn DirectoryCatalog>,
+        file_catalog: Option<&dyn FileCatalog>,
+    ) -> EditorAction {
         if self.workspace_picker_open {
             return self.handle_workspace_picker_key(key.code);
         }
@@ -1047,7 +1007,7 @@ impl EditorState {
             return self.handle_inspector_picker_key(key.code);
         }
         if self.input.is_some() {
-            return self.handle_input_key(key.code, directory_catalog);
+            return self.handle_input_key(key.code, directory_catalog, file_catalog);
         }
         if self.palette_open {
             return self.handle_palette_key(key.code);
@@ -1117,7 +1077,7 @@ impl EditorState {
                     EditorAction::None
                 }
                 EditorPanel::Inspector => {
-                    self.activate_selected_inspector_field(directory_catalog);
+                    self.activate_selected_inspector_field(directory_catalog, file_catalog);
                     EditorAction::None
                 }
             },
@@ -1146,6 +1106,7 @@ impl EditorState {
     fn activate_selected_inspector_field(
         &mut self,
         directory_catalog: Option<&dyn DirectoryCatalog>,
+        file_catalog: Option<&dyn FileCatalog>,
     ) {
         let Some(field) = self.selected_inspector_field() else {
             self.notice = Some("No editable fields are available for this action.".to_owned());
@@ -1164,8 +1125,11 @@ impl EditorState {
             InspectorField::Command => self.begin_input(EditorField::CommandProgram),
             InspectorField::ContainerName => self.begin_input(EditorField::ContainerName),
             InspectorField::ContainerImage => self.begin_input(EditorField::ContainerImage),
-            InspectorField::ComposeProjectName => self.begin_input(EditorField::ComposeProjectName),
-            InspectorField::ComposeFiles => self.begin_input(EditorField::ComposeFiles),
+            InspectorField::ComposeFile => self.begin_input_with_catalogs(
+                EditorField::ComposeFile,
+                directory_catalog,
+                file_catalog,
+            ),
             InspectorField::EmulatorAvd => self.begin_input(EditorField::EmulatorAvd),
             InspectorField::ReadinessDelay => self.begin_input(EditorField::ReadinessDelay),
             InspectorField::DesktopWorkspace => self.open_workspace_choice_picker(field),
@@ -1541,6 +1505,7 @@ impl EditorState {
         &mut self,
         key: KeyCode,
         directory_catalog: Option<&dyn DirectoryCatalog>,
+        file_catalog: Option<&dyn FileCatalog>,
     ) -> EditorAction {
         match key {
             KeyCode::Left => {
@@ -1592,7 +1557,7 @@ impl EditorState {
                     .map_or(input.value.len(), |(index, _)| index);
                 input.value.insert(byte_index, character);
                 input.cursor = input.cursor.saturating_add(1);
-                self.refresh_path_completion(directory_catalog);
+                self.refresh_path_completion(directory_catalog, file_catalog);
             }
             KeyCode::Backspace => {
                 let Some(input) = self.input.as_mut() else {
@@ -1613,7 +1578,7 @@ impl EditorState {
                     input.value.replace_range(start..end, "");
                     input.cursor -= 1;
                 }
-                self.refresh_path_completion(directory_catalog);
+                self.refresh_path_completion(directory_catalog, file_catalog);
             }
             KeyCode::Delete => {
                 let Some(input) = self.input.as_mut() else {
@@ -1633,10 +1598,10 @@ impl EditorState {
                         .map_or(input.value.len(), |(index, _)| index);
                     input.value.replace_range(start..end, "");
                 }
-                self.refresh_path_completion(directory_catalog);
+                self.refresh_path_completion(directory_catalog, file_catalog);
             }
             KeyCode::Tab => {
-                self.complete_selected_path(directory_catalog);
+                self.complete_selected_path(directory_catalog, file_catalog);
             }
             KeyCode::Enter => {
                 let selected_value = self
@@ -1656,9 +1621,27 @@ impl EditorState {
                         self.commit_input(input);
                     }
                 } else if path_state.as_ref().is_some_and(|(is_empty, _)| *is_empty) {
-                    self.record_notice("Cannot apply path: a directory is required.".to_owned());
+                    let message = self
+                        .input
+                        .as_ref()
+                        .map(|input| match input.field {
+                            EditorField::ComposeFile => {
+                                "Cannot apply Compose file: a file is required."
+                            }
+                            _ => "Cannot apply path: a directory is required.",
+                        })
+                        .unwrap_or("Cannot apply path: a directory is required.");
+                    self.record_notice(message.to_owned());
                 } else if let Some(error) = path_state.and_then(|(_, error)| error) {
-                    self.record_notice(format!("Cannot apply path: {error}"));
+                    let prefix = self
+                        .input
+                        .as_ref()
+                        .map(|input| match input.field {
+                            EditorField::ComposeFile => "Cannot apply Compose file",
+                            _ => "Cannot apply path",
+                        })
+                        .unwrap_or("Cannot apply path");
+                    self.record_notice(format!("{prefix}: {error}"));
                 } else if let Some(input) = self.input.take() {
                     self.commit_input(input);
                 }
@@ -1712,16 +1695,11 @@ impl EditorState {
                 .map(|action| action.id.clone())
                 .ok_or_else(|| WorkstateError::new(ErrorCategory::Ui, "no action is selected"))
                 .and_then(|action_id| self.set_action_container_image(&action_id, value)),
-            EditorField::ComposeProjectName => self
+            EditorField::ComposeFile => self
                 .selected_action_spec()
                 .map(|action| action.id.clone())
                 .ok_or_else(|| WorkstateError::new(ErrorCategory::Ui, "no action is selected"))
-                .and_then(|action_id| self.set_action_compose_project_name(&action_id, value)),
-            EditorField::ComposeFiles => self
-                .selected_action_spec()
-                .map(|action| action.id.clone())
-                .ok_or_else(|| WorkstateError::new(ErrorCategory::Ui, "no action is selected"))
-                .and_then(|action_id| self.set_action_compose_files(&action_id, value)),
+                .and_then(|action_id| self.set_action_compose_file(&action_id, value)),
             EditorField::EmulatorAvd => self
                 .selected_action_spec()
                 .map(|action| action.id.clone())
@@ -1748,6 +1726,15 @@ impl EditorState {
         &mut self,
         field: EditorField,
         directory_catalog: Option<&dyn DirectoryCatalog>,
+    ) {
+        self.begin_input_with_catalogs(field, directory_catalog, None);
+    }
+
+    pub fn begin_input_with_catalogs(
+        &mut self,
+        field: EditorField,
+        directory_catalog: Option<&dyn DirectoryCatalog>,
+        file_catalog: Option<&dyn FileCatalog>,
     ) {
         let value = match field {
             EditorField::EnvironmentName => self.configuration.name.to_string(),
@@ -1793,24 +1780,14 @@ impl EditorState {
                         .and_then(|container| container.image.clone())
                 })
                 .unwrap_or_default(),
-            EditorField::ComposeProjectName => self
+            EditorField::ComposeFile => self
                 .selected_action_spec()
                 .and_then(|action| {
                     action
                         .parameters
                         .compose
                         .as_ref()
-                        .and_then(|compose| compose.project_name.clone())
-                })
-                .unwrap_or_default(),
-            EditorField::ComposeFiles => self
-                .selected_action_spec()
-                .and_then(|action| {
-                    action
-                        .parameters
-                        .compose
-                        .as_ref()
-                        .map(|compose| compose.files.join(", "))
+                        .and_then(|compose| compose.compose_file.clone())
                 })
                 .unwrap_or_default(),
             EditorField::EmulatorAvd => self
@@ -1844,9 +1821,9 @@ impl EditorState {
             value,
             cursor,
             replace_on_next_char: true,
-            path_completion: is_directory_field(field).then_some(PathInputState::default()),
+            path_completion: is_path_completion_field(field).then_some(PathInputState::default()),
         });
-        self.refresh_path_completion(directory_catalog);
+        self.refresh_path_completion(directory_catalog, file_catalog);
     }
 
     fn move_path_suggestion(&mut self, offset: isize) {
@@ -1857,36 +1834,47 @@ impl EditorState {
         }
     }
 
-    fn complete_selected_path(&mut self, directory_catalog: Option<&dyn DirectoryCatalog>) {
-        let Some(value) = self
-            .input
-            .as_ref()
-            .and_then(|input| input.path_completion.as_ref())
-            .and_then(PathInputState::selected_value_for_navigation)
-        else {
+    fn complete_selected_path(
+        &mut self,
+        directory_catalog: Option<&dyn DirectoryCatalog>,
+        file_catalog: Option<&dyn FileCatalog>,
+    ) {
+        let Some((value, add_separator)) = self.input.as_ref().and_then(|input| {
+            input.path_completion.as_ref().and_then(|completion| {
+                completion
+                    .selected_value()
+                    .map(|value| (value, is_directory_field(input.field)))
+            })
+        }) else {
             return;
+        };
+        let value = if add_separator {
+            append_directory_separator(value)
+        } else {
+            value
         };
         if let Some(input) = self.input.as_mut() {
             input.value = value;
             input.cursor = input.value.chars().count();
             input.replace_on_next_char = false;
         }
-        self.refresh_path_completion(directory_catalog);
+        self.refresh_path_completion(directory_catalog, file_catalog);
     }
 
-    fn refresh_path_completion(&mut self, directory_catalog: Option<&dyn DirectoryCatalog>) {
-        let Some(value) = self
+    fn refresh_path_completion(
+        &mut self,
+        directory_catalog: Option<&dyn DirectoryCatalog>,
+        file_catalog: Option<&dyn FileCatalog>,
+    ) {
+        let Some((field, value)) = self
             .input
             .as_ref()
-            .filter(|input| is_directory_field(input.field))
-            .map(|input| input.value.clone())
+            .filter(|input| is_path_completion_field(input.field))
+            .map(|input| (input.field, input.value.clone()))
         else {
             return;
         };
-        let Some(directory_catalog) = directory_catalog else {
-            return;
-        };
-        if value.is_empty() {
+        if value.is_empty() && is_directory_field(field) {
             if let Some(input) = self.input.as_mut()
                 && let Some(path_completion) = input.path_completion.as_mut()
             {
@@ -1894,12 +1882,32 @@ impl EditorState {
             }
             return;
         }
-        let completion = match directory_catalog.complete(&value) {
-            Ok(completion) => completion,
-            Err(error) => DirectoryCompletion {
-                suggestions: Vec::new(),
-                validation_error: Some(error.to_string()),
-            },
+        let completion = if is_directory_field(field) {
+            let Some(directory_catalog) = directory_catalog else {
+                return;
+            };
+            match directory_catalog.complete(&value) {
+                Ok(completion) => completion,
+                Err(error) => DirectoryCompletion {
+                    suggestions: Vec::new(),
+                    validation_error: Some(error.to_string()),
+                },
+            }
+        } else {
+            let Some(file_catalog) = file_catalog else {
+                return;
+            };
+            let working_directory = self
+                .selected_action_spec()
+                .and_then(|action| action.working_directory.as_deref())
+                .unwrap_or_default();
+            match file_catalog.complete_yaml(working_directory, &value) {
+                Ok(completion) => completion,
+                Err(error) => DirectoryCompletion {
+                    suggestions: Vec::new(),
+                    validation_error: Some(error.to_string()),
+                },
+            }
         };
         if let Some(input) = self.input.as_mut()
             && let Some(path_completion) = input.path_completion.as_mut()
@@ -2358,8 +2366,7 @@ fn validation_field(error: &DomainError) -> Option<InspectorField> {
             "desktop_workspace" => Some(InspectorField::DesktopWorkspace),
             "container" | "container.name" => Some(InspectorField::ContainerName),
             "container.image" => Some(InspectorField::ContainerImage),
-            "compose" | "compose.project_name" => Some(InspectorField::ComposeProjectName),
-            "compose.files" => Some(InspectorField::ComposeFiles),
+            "compose" | "compose.compose_file" => Some(InspectorField::ComposeFile),
             "emulator" | "emulator.avd" => Some(InspectorField::EmulatorAvd),
             "readiness_checks" => Some(InspectorField::ReadinessDelay),
             _ => None,
@@ -2438,6 +2445,10 @@ fn is_directory_field(field: EditorField) -> bool {
     )
 }
 
+fn is_path_completion_field(field: EditorField) -> bool {
+    is_directory_field(field) || matches!(field, EditorField::ComposeFile)
+}
+
 fn is_save_shortcut(key: KeyEvent) -> bool {
     if !matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S')) {
         return false;
@@ -2470,7 +2481,7 @@ mod tests {
     use crate::{
         application::ports::{
             DesktopWorkspaceSnapshot, DirectoryCatalog, DirectoryCompletion, DirectorySuggestion,
-            InstalledApplication,
+            FileCatalog, InstalledApplication,
         },
         domain::{
             ActionKind, ActionSpec, EnvironmentConfig, ExecutionMode, TilingPreference,
@@ -2536,9 +2547,44 @@ mod tests {
         }
     }
 
+    struct FakeFileCatalog;
+
+    impl FileCatalog for FakeFileCatalog {
+        fn complete_yaml(
+            &self,
+            working_directory: &str,
+            input: &str,
+        ) -> Result<DirectoryCompletion> {
+            assert_eq!(working_directory, "~/project");
+            let suggestions = vec![
+                DirectorySuggestion {
+                    name: "compose.yaml".to_owned(),
+                    value: "compose.yaml".to_owned(),
+                },
+                DirectorySuggestion {
+                    name: "docker-compose.yml".to_owned(),
+                    value: "docker-compose.yml".to_owned(),
+                },
+            ];
+            Ok(DirectoryCompletion {
+                validation_error: (!input.is_empty())
+                    .then_some("the selected Compose file does not exist".to_owned()),
+                suggestions,
+            })
+        }
+    }
+
     fn send_path_key(editor: &mut EditorState, catalog: &dyn DirectoryCatalog, key: KeyCode) {
         editor.handle_key_event_with_directory_catalog(
             KeyEvent::new(key, KeyModifiers::NONE),
+            Some(catalog),
+        );
+    }
+
+    fn send_file_key(editor: &mut EditorState, catalog: &dyn FileCatalog, key: KeyCode) {
+        editor.handle_key_event_with_catalogs(
+            KeyEvent::new(key, KeyModifiers::NONE),
+            None,
             Some(catalog),
         );
     }
@@ -2990,6 +3036,58 @@ mod tests {
                 .selected_action_spec()
                 .and_then(|action| action.parameters.project_path.as_deref()),
             Some("~/Code/Workspace")
+        );
+    }
+
+    #[test]
+    fn compose_file_is_after_working_directory_and_uses_file_completion() {
+        let Some(mut configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let Some(action) = ActionSpec::new("compose", ActionKind::StartCompose).ok() else {
+            return;
+        };
+        assert!(configuration.add_action(action).is_ok());
+        let mut editor = EditorState::new(configuration, EditorMode::Create);
+        let Some(action_id) = editor
+            .selected_action_spec()
+            .map(|action| action.id.clone())
+        else {
+            return;
+        };
+        assert!(
+            editor
+                .set_action_working_directory(&action_id, Some("~/project".to_owned()))
+                .is_ok()
+        );
+        assert_eq!(
+            editor.inspector_fields(),
+            vec![
+                InspectorField::ActionLabel,
+                InspectorField::WorkingDirectory,
+                InspectorField::ComposeFile,
+                InspectorField::Dependencies,
+            ]
+        );
+
+        let catalog = FakeFileCatalog;
+        editor.begin_input_with_catalogs(EditorField::ComposeFile, None, Some(&catalog));
+        assert_eq!(
+            editor
+                .input
+                .as_ref()
+                .and_then(|input| input.path_completion.as_ref())
+                .map(|completion| completion.suggestions.len()),
+            Some(2)
+        );
+        send_file_key(&mut editor, &catalog, KeyCode::Down);
+        send_file_key(&mut editor, &catalog, KeyCode::Enter);
+        assert_eq!(
+            editor
+                .selected_action_spec()
+                .and_then(|action| action.parameters.compose.as_ref())
+                .and_then(|compose| compose.compose_file.as_deref()),
+            Some("docker-compose.yml")
         );
     }
 

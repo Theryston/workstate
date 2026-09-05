@@ -9,7 +9,8 @@ pub mod widgets;
 
 pub use app::{
     EditorOutcome, ProgressEventSource, confirm_delete, edit_environment,
-    edit_environment_with_directory_catalog, select_environment, show_lifecycle_progress,
+    edit_environment_with_catalogs, edit_environment_with_directory_catalog, select_environment,
+    show_lifecycle_progress,
 };
 pub use editor::{
     ActionPaletteEntry, EditorAction, EditorField, EditorMode, EditorPanel, EditorReview,

@@ -8,6 +8,7 @@ pub trait FileSystem: Send + Sync {
     fn is_directory(&self, path: &Path) -> Result<bool>;
     fn create_directory_all(&self, path: &Path) -> Result<()>;
     fn list_directories(&self, path: &Path) -> Result<Vec<PathBuf>>;
+    fn list_files(&self, path: &Path) -> Result<Vec<PathBuf>>;
     fn read(&self, path: &Path) -> Result<Vec<u8>>;
     fn write(&self, path: &Path, contents: &[u8]) -> Result<()>;
     fn sync(&self, path: &Path) -> Result<()>;

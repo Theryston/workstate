@@ -489,6 +489,8 @@ Path resolution must be centralized in an injected path service or infrastructur
 
 All editor fields that accept directories must use the reusable directory-input flow. The flow must offer directory-only autocomplete, preserve the user's `~`, `$HOME`, or absolute-path representation, refresh suggestions after each path separator, support `Up` and `Down` selection, and complete the selected directory with `Tab`. It must display the current path and available directory suggestions while the input is active. Path validation may run while typing to keep the input state accurate, but validation errors must not be rendered inside the popup. `Enter` must not commit an invalid directory value; it must show the English error in the editor footer, where the standard editor notices appear. The UI must consume the injected `DirectoryCatalog` port and must never enumerate the filesystem directly. The initial local implementation uses the shared `FileSystem` and `PathResolver`; future operating-system implementations may provide their own catalog without changing the editor.
 
+The `Start Docker Compose stack` action has one `Compose file` field and one `Working directory` field. The working directory is shown and edited first. Once it is configured, the Compose file field reuses the same fixed-height path-completion surface and keyboard navigation as directory inputs, but its catalog lists only YAML files (`.yaml` and `.yml`) relative to that working directory. `Tab` and `Enter` complete or apply the selected file name without appending a directory separator. The Compose configuration must not expose a user-editable Compose project-name field or a list of Compose files.
+
 Every editable text field in the editor must render the native terminal cursor at the current insertion point. Text editing must support `Left`, `Right`, `Home`, `End`, character insertion, `Backspace`, and `Delete`. Cursor movement must operate on valid character boundaries, keep the insertion point visible when the value is wider than the field, and never be represented by a fake text character.
 
 ### 8.4 Desktop workspace targets
@@ -1024,6 +1026,7 @@ src/
 │   │   ├── containers.rs
 │   │   ├── editor.rs
 │   │   ├── emulator.rs
+│   │   ├── files.rs
 │   │   └── applications.rs
 │   ├── planner/
 │   │   ├── mod.rs
@@ -1045,7 +1048,8 @@ src/
 │   ├── filesystem/
 │   │   ├── mod.rs
 │   │   ├── local.rs
-│   │   └── directory_catalog.rs
+│   │   ├── directory_catalog.rs
+│   │   └── file_catalog.rs
 │   ├── process/
 │   │   ├── mod.rs
 │   │   └── tokio_runner.rs
@@ -1303,7 +1307,7 @@ Run command               action name, command, working directory,
                            execution mode, dependencies
 Configure tiling          action name, desktop workspace, tiling, dependencies
 Start container            action name, container, working directory, dependencies
-Start Compose              action name, Compose project, working directory,
+Start Compose              action name, working directory, Compose file,
                            dependencies
 Start Android Emulator     action name, Android virtual device,
                            desktop workspace, dependencies

@@ -63,7 +63,8 @@ impl DockerComposeController {
         if services.is_empty() {
             return Ok(DockerComposeObservation::Missing);
         }
-        let project_name = project_name(&request, parsed.project_name.as_deref())?;
+        let project_name =
+            project_name(&request.working_directory, parsed.project_name.as_deref())?;
         Ok(DockerComposeObservation::Present(DockerComposeSnapshot {
             project_name,
             working_directory: request.working_directory,
@@ -115,10 +116,7 @@ impl DockerComposeController {
         operation: [&str; N],
     ) -> Result<Vec<String>> {
         let mut arguments = self.command_prefix();
-        if let Some(project) = &request.specification.project_name {
-            arguments.extend(["--project-name".to_owned(), project.clone()]);
-        }
-        for file in &request.specification.files {
+        if let Some(file) = &request.specification.compose_file {
             let path = resolve_compose_file(&request.working_directory, file)?;
             arguments.extend(["--file".to_owned(), path.display().to_string()]);
         }
@@ -154,15 +152,11 @@ impl DockerComposeController {
     }
 }
 
-fn project_name(request: &DockerComposeRequest, observed: Option<&str>) -> Result<String> {
-    if let Some(name) = &request.specification.project_name {
-        return Ok(name.clone());
-    }
+fn project_name(working_directory: &Path, observed: Option<&str>) -> Result<String> {
     if let Some(name) = observed.filter(|value| !value.is_empty()) {
         return Ok(name.to_owned());
     }
-    request
-        .working_directory
+    working_directory
         .file_name()
         .and_then(|value| value.to_str())
         .filter(|value| !value.is_empty())

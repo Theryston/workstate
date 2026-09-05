@@ -402,9 +402,7 @@ pub struct ContainerPort {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ComposeSpec {
     #[serde(default)]
-    pub project_name: Option<String>,
-    #[serde(default)]
-    pub files: Vec<String>,
+    pub compose_file: Option<String>,
     #[serde(default)]
     pub services: Vec<String>,
     #[serde(default)]
@@ -416,24 +414,13 @@ pub struct ComposeSpec {
 impl ComposeSpec {
     fn validate_for(&self, action_id: &ActionId) -> Result<(), DomainError> {
         if self
-            .project_name
+            .compose_file
             .as_ref()
-            .is_some_and(|name| name.is_empty() || name.chars().any(char::is_control))
+            .is_some_and(|file| file.is_empty() || file.chars().any(char::is_control))
         {
             return Err(DomainError::InvalidActionParameter {
                 action_id: action_id.to_string(),
-                parameter: "compose.project_name".to_owned(),
-            });
-        }
-
-        if self
-            .files
-            .iter()
-            .any(|file| file.is_empty() || file.chars().any(char::is_control))
-        {
-            return Err(DomainError::InvalidActionParameter {
-                action_id: action_id.to_string(),
-                parameter: "compose.files".to_owned(),
+                parameter: "compose.compose_file".to_owned(),
             });
         }
 

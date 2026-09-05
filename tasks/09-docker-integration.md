@@ -72,7 +72,7 @@ Keep engine, desktop, and Compose mechanisms behind one integration-neutral Dock
    - stopping only owned resources.
 2. Represent resource identity independently from display names:
    - container id where available;
-   - Compose project name and working directory;
+   - observed Compose project name and working directory;
    - configured service name;
    - Docker Desktop process identity when applicable.
 3. Return explicit outcomes for healthy, repaired, created, unchanged, not found, unavailable, ambiguous, and failed.
@@ -107,10 +107,10 @@ Keep engine, desktop, and Compose mechanisms behind one integration-neutral Dock
 
 ### 4. Implement Docker Compose actions
 
-1. Require an explicit Compose working directory and compose file list or command configuration.
+1. Require an explicit Compose working directory and one compose file or command configuration.
 2. Resolve paths before execution; never use the caller's PWD implicitly.
 3. Use the generic command runner with a structured argv specification where possible.
-4. Identify the Compose project by project name and resolved working directory.
+4. Identify the Compose project by the observed Compose project name and resolved working directory. The project name is runtime metadata, not user-editable configuration.
 5. Inspect the project before running up.
 6. Reuse an already healthy matching project without restarting it.
 7. Run the configured up operation only when required, then wait for service checks.

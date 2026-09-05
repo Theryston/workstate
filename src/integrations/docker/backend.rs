@@ -1638,16 +1638,14 @@ impl DockerActionHandler {
         let working_directory = self
             .resolve_directory(action.working_directory.as_deref(), true)?
             .ok_or_else(|| compose_configuration_error("Compose working directory is missing"))?;
-        if specification.files.is_empty() && specification.up_command.is_none() {
+        if specification.compose_file.is_none() && specification.up_command.is_none() {
             return Err(compose_configuration_error(
-                "Docker Compose actions require at least one compose file or an explicit up command",
+                "Docker Compose actions require a compose file or an explicit up command",
             ));
         }
-        specification.files = specification
-            .files
-            .iter()
-            .map(|file| self.resolve_compose_file(&working_directory, file))
-            .collect::<Result<Vec<_>>>()?;
+        if let Some(file) = &specification.compose_file {
+            specification.compose_file = Some(self.resolve_compose_file(&working_directory, file)?);
+        }
         Ok(DockerComposeRequest {
             context: self.context(action)?,
             specification,
@@ -2320,17 +2318,10 @@ fn compose_lock_key(request: &DockerComposeRequest) -> String {
 
 fn compose_lock_identity(request: &DockerComposeRequest) -> String {
     let project_name = request
-        .specification
-        .project_name
-        .as_deref()
+        .working_directory
+        .file_name()
+        .and_then(|value| value.to_str())
         .filter(|name| !name.is_empty())
-        .or_else(|| {
-            request
-                .working_directory
-                .file_name()
-                .and_then(|value| value.to_str())
-                .filter(|name| !name.is_empty())
-        })
         .unwrap_or("compose-project");
     models::compose_project_identity(project_name, &request.working_directory)
 }

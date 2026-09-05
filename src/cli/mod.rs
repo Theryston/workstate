@@ -18,7 +18,7 @@ use crate::{
     ui::{
         ApplicationProgressEventSource, EditorMode, EditorOutcome, EditorState,
         EnvironmentListItem, EnvironmentStatus, ProgressOperation, SelectorState, confirm_delete,
-        edit_environment_with_directory_catalog as run_editor, prompt_text, select_environment,
+        edit_environment_with_catalogs as run_editor, prompt_text, select_environment,
         show_lifecycle_progress,
     },
 };
@@ -330,7 +330,12 @@ async fn open_environment_editor(
         Ok(applications) => editor.with_installed_applications(applications),
         Err(error) => editor.with_application_observation_error(error.render()),
     };
-    match run_editor(editor, Some(context.directory_catalog()), options.no_color)? {
+    match run_editor(
+        editor,
+        Some(context.directory_catalog()),
+        Some(context.file_catalog()),
+        options.no_color,
+    )? {
         EditorOutcome::Cancelled => Ok(()),
         EditorOutcome::Saved(configuration) => {
             match mode {

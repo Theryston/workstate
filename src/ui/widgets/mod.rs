@@ -799,7 +799,26 @@ fn render_path_input(
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(2)])
         .split(inner);
-    let path_label = "Path  ";
+    let (path_label, list_title, empty_message) = match input.field {
+        super::editor::EditorField::ComposeFile => (
+            "File  ",
+            "YAML files",
+            if input.value.is_empty() {
+                "Select a YAML file from the working directory."
+            } else {
+                "No matching YAML files."
+            },
+        ),
+        _ => (
+            "Path  ",
+            "Directories",
+            if input.value.is_empty() {
+                "Type ~/, $HOME/, or an absolute path."
+            } else {
+                "No matching directories."
+            },
+        ),
+    };
     let path_label_width = Line::raw(path_label).width();
     let available_width = sections[0].width.saturating_sub(path_label_width as u16);
     let (display_value, cursor_column) = input_display(&input.value, input.cursor, available_width);
@@ -810,11 +829,6 @@ fn render_path_input(
     frame.render_widget(path, sections[0]);
     set_input_cursor(frame, sections[0], path_label_width, cursor_column);
 
-    let empty_message = if input.value.is_empty() {
-        "Type ~/, $HOME/, or an absolute path."
-    } else {
-        "No matching directories."
-    };
     let items = if completion.suggestions.is_empty() {
         vec![ListItem::new(Span::styled(
             empty_message,
@@ -837,7 +851,7 @@ fn render_path_input(
             Block::default()
                 .borders(Borders::TOP)
                 .border_style(theme.border_style())
-                .title(Span::styled("Directories", theme.title_style())),
+                .title(Span::styled(list_title, theme.title_style())),
         )
         .highlight_style(theme.selected_style())
         .highlight_symbol("▸ ");
@@ -968,8 +982,7 @@ fn field_label(field: super::editor::EditorField) -> &'static str {
         super::editor::EditorField::CommandProgram => "command",
         super::editor::EditorField::ContainerName => "container name",
         super::editor::EditorField::ContainerImage => "container image",
-        super::editor::EditorField::ComposeProjectName => "Compose project name",
-        super::editor::EditorField::ComposeFiles => "Compose files",
+        super::editor::EditorField::ComposeFile => "Compose file",
         super::editor::EditorField::EmulatorAvd => "Android virtual device",
         super::editor::EditorField::ReadinessDelay => "readiness delay in milliseconds",
     }

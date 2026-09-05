@@ -4,7 +4,7 @@ use crossterm::event::KeyCode;
 use ratatui::{Terminal, backend::CrosstermBackend};
 
 use crate::{
-    application::ports::DirectoryCatalog,
+    application::ports::{DirectoryCatalog, FileCatalog},
     domain::{EnvironmentConfig, EnvironmentName, EnvironmentSlug},
     error::{ErrorCategory, Result, WorkstateError},
 };
@@ -44,17 +44,27 @@ pub fn edit_environment_with_directory_catalog(
     directory_catalog: Option<&dyn DirectoryCatalog>,
     no_color: bool,
 ) -> Result<EditorOutcome> {
+    edit_environment_with_catalogs(state, directory_catalog, None, no_color)
+}
+
+pub fn edit_environment_with_catalogs(
+    state: EditorState,
+    directory_catalog: Option<&dyn DirectoryCatalog>,
+    file_catalog: Option<&dyn FileCatalog>,
+    no_color: bool,
+) -> Result<EditorOutcome> {
     let mut session = super::event::CrosstermTerminalSession;
     run_with_terminal(&mut session, || {
         let backend = CrosstermBackend::new(io::stdout());
         let mut terminal = Terminal::new(backend)
             .map_err(|source| ui_error("could not initialize the terminal UI", source))?;
         let mut source = CrosstermEventSource::default();
-        run_editor_loop(
+        run_editor_loop_with_catalogs(
             &mut terminal,
             &mut source,
             state,
             directory_catalog,
+            file_catalog,
             no_color,
         )
     })
@@ -148,11 +158,12 @@ where
     }
 }
 
-fn run_editor_loop<B, S>(
+fn run_editor_loop_with_catalogs<B, S>(
     terminal: &mut Terminal<B>,
     source: &mut S,
     mut state: EditorState,
     directory_catalog: Option<&dyn DirectoryCatalog>,
+    file_catalog: Option<&dyn FileCatalog>,
     no_color: bool,
 ) -> Result<EditorOutcome>
 where
@@ -188,17 +199,19 @@ where
                 }
                 _ => {}
             },
-            UiEvent::Key(key) => match state
-                .handle_key_event_with_directory_catalog(key, directory_catalog)
-            {
-                EditorAction::SaveRequested => {
-                    if state.validate().is_ok() {
-                        save_confirmation = true;
+            UiEvent::Key(key) => {
+                match state.handle_key_event_with_catalogs(key, directory_catalog, file_catalog) {
+                    EditorAction::SaveRequested => {
+                        if state.validate().is_ok() {
+                            save_confirmation = true;
+                        }
                     }
+                    EditorAction::CancelRequested => return Ok(EditorOutcome::Cancelled),
+                    EditorAction::None
+                    | EditorAction::PaletteOpened
+                    | EditorAction::ReviewOpened => {}
                 }
-                EditorAction::CancelRequested => return Ok(EditorOutcome::Cancelled),
-                EditorAction::None | EditorAction::PaletteOpened | EditorAction::ReviewOpened => {}
-            },
+            }
             UiEvent::Resize { .. } | UiEvent::Tick => {}
         }
     }
@@ -280,8 +293,8 @@ mod tests {
     };
 
     use super::{
-        EditorOutcome, ProgressEventSource, run_delete_loop, run_editor_loop, run_progress_loop,
-        run_selector_loop,
+        EditorOutcome, ProgressEventSource, run_delete_loop, run_editor_loop_with_catalogs,
+        run_progress_loop, run_selector_loop,
     };
     use crate::ui::{
         editor::{EditorMode, EditorState},
@@ -362,7 +375,8 @@ mod tests {
             return;
         };
         let mut events = FakeEvents::keys(['s', 'y']);
-        let result = run_editor_loop(&mut terminal, &mut events, state, None, true);
+        let result =
+            run_editor_loop_with_catalogs(&mut terminal, &mut events, state, None, None, true);
         assert_eq!(result.ok(), Some(EditorOutcome::Saved(configuration)));
     }
 

@@ -63,16 +63,11 @@ fn container_request(
     })
 }
 
-fn compose_request(
-    action_id: &str,
-    project_name: &str,
-    working_directory: &str,
-) -> ValueResult<DockerComposeRequest> {
+fn compose_request(action_id: &str, working_directory: &str) -> ValueResult<DockerComposeRequest> {
     Ok(DockerComposeRequest {
         context: context(action_id)?,
         specification: ComposeSpec {
-            project_name: Some(project_name.to_owned()),
-            files: vec!["compose.yaml".to_owned()],
+            compose_file: Some("compose.yaml".to_owned()),
             services: Vec::new(),
             up_command: None,
             down_command: None,
@@ -345,7 +340,7 @@ async fn process_backend_reuses_a_healthy_compose_project() -> TestResult {
 
     let outcome = backend
         .ensure_compose(
-            compose_request("stack", "blog", "/tmp/blog")?,
+            compose_request("stack", "/tmp/blog")?,
             CancellationToken::new(),
         )
         .await?;
@@ -504,7 +499,7 @@ async fn process_backend_uses_compose_down_only_for_fully_owned_projects() -> Te
         None,
         None,
     )?;
-    let request = compose_request("stack", "blog", "/tmp/blog")?;
+    let request = compose_request("stack", "/tmp/blog")?;
     let snapshot = DockerComposeSnapshot {
         project_name: "blog".to_owned(),
         working_directory: request.working_directory.clone(),
@@ -559,7 +554,7 @@ async fn process_backend_uses_compose_down_only_for_fully_owned_projects() -> Te
 #[tokio::test]
 async fn healthy_compose_project_is_reused() -> TestResult {
     let docker = FakeDocker::default();
-    let request = compose_request("stack", "blog", "/tmp/blog")?;
+    let request = compose_request("stack", "/tmp/blog")?;
     docker.insert_compose(fake_docker::compose_snapshot(
         "blog",
         request.working_directory.clone(),
@@ -583,8 +578,8 @@ async fn healthy_compose_project_is_reused() -> TestResult {
 #[tokio::test]
 async fn compose_project_identity_separates_same_named_projects() -> TestResult {
     let docker = FakeDocker::default();
-    let first = compose_request("first", "blog", "/tmp/first")?;
-    let second = compose_request("second", "blog", "/tmp/second")?;
+    let first = compose_request("first", "/tmp/first")?;
+    let second = compose_request("second", "/tmp/second")?;
     docker.insert_compose(fake_docker::compose_snapshot(
         "blog",
         first.working_directory.clone(),
@@ -603,7 +598,7 @@ async fn compose_project_identity_separates_same_named_projects() -> TestResult 
     );
     assert!(
         docker
-            .compose_project("blog", &PathBuf::from("/tmp/second"))?
+            .compose_project("second", &PathBuf::from("/tmp/second"))?
             .is_some()
     );
     Ok(())

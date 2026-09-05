@@ -6,6 +6,7 @@ pub mod directories;
 pub mod docker;
 pub mod editor;
 pub mod emulator;
+pub mod files;
 pub mod filesystem;
 pub mod persistence;
 pub mod platform;
@@ -32,6 +33,7 @@ pub use docker::{
 };
 pub use editor::{EditorBackend, EditorOpenOutcome, EditorOperationStatus, EditorWindowSnapshot};
 pub use emulator::EmulatorBackend;
+pub use files::FileCatalog;
 pub use filesystem::FileSystem;
 pub use persistence::{ConfigStore, StateStore};
 pub use platform::{PlatformDetector, PlatformProbe};

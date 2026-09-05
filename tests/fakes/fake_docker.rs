@@ -119,16 +119,10 @@ impl FakeDocker {
 
     fn project_key(request: &DockerComposeRequest) -> String {
         let name = request
-            .specification
-            .project_name
-            .clone()
-            .or_else(|| {
-                request
-                    .working_directory
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .map(str::to_owned)
-            })
+            .working_directory
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(str::to_owned)
             .unwrap_or_else(|| "fake-project".to_owned());
         models::compose_project_identity(&name, &request.working_directory)
     }
@@ -361,16 +355,10 @@ impl DockerBackend for FakeDocker {
                 );
             }
             let project_name = request
-                .specification
-                .project_name
-                .clone()
-                .or_else(|| {
-                    request
-                        .working_directory
-                        .file_name()
-                        .and_then(|value| value.to_str())
-                        .map(str::to_owned)
-                })
+                .working_directory
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(str::to_owned)
                 .unwrap_or_else(|| "fake-project".to_owned());
             let service_names = if request.specification.services.is_empty() {
                 vec!["default".to_owned()]
