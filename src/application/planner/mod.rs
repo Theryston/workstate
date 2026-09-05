@@ -1433,7 +1433,7 @@ mod tests {
 
     #[tokio::test]
     async fn default_readiness_runner_only_executes_non_external_checks() {
-        let Some(action) = ActionSpec::new("wait", ActionKind::WaitForCondition).ok() else {
+        let Some(action) = ActionSpec::new("command", ActionKind::RunCommand).ok() else {
             return;
         };
         let runner = NoopReadinessCheckRunner;

@@ -936,9 +936,6 @@ fn action_label(action: &ActionSpec) -> String {
         ActionKind::StartContainer => "Start Docker container".to_owned(),
         ActionKind::StartCompose => "Start Docker Compose stack".to_owned(),
         ActionKind::StartAndroidEmulator => "Start Android Emulator".to_owned(),
-        ActionKind::WaitForCondition => "Wait for condition".to_owned(),
-        ActionKind::VerifyResource => "Verify resource".to_owned(),
-        ActionKind::Custom { name } => format!("Custom action: {name}"),
     }
 }
 
@@ -984,7 +981,6 @@ fn field_label(field: super::editor::EditorField) -> &'static str {
         super::editor::EditorField::ContainerImage => "container image",
         super::editor::EditorField::ComposeFile => "Compose file",
         super::editor::EditorField::EmulatorAvd => "Device",
-        super::editor::EditorField::ReadinessDelay => "readiness delay in milliseconds",
     }
 }
 

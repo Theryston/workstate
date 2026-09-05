@@ -156,9 +156,6 @@ Configure tiling
 Start Docker container
 Start Docker Compose stack
 Start Android Emulator
-Wait for condition
-Verify resource
-Custom action
 ~~~
 
 The `Open application` action must configure its `Application` field through a scrollable selector populated by the injected platform application catalog. Do not render this field as free-form text. On Linux, the selector lists visible launchable desktop entries, showing each friendly name with its desktop-entry ID as secondary detail, and persists the selected ID in the existing action parameter. If the catalog cannot be read or has no entries, show an English error and prevent arbitrary application values from being entered.

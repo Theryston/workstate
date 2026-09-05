@@ -282,19 +282,8 @@ fn registry_supports_lookup_and_additive_registration() {
     assert!(registry.register_profile(profile).is_ok());
     assert!(
         registry
-            .register_handler(ActionHandlerDescriptor::new(
-                "custom:preview",
-                "preview",
-                [],
-            ))
+            .register_handler(ActionHandlerDescriptor::new("preview", "preview", [],))
             .is_ok()
-    );
-    assert!(
-        registry
-            .handler_for(&ActionKind::Custom {
-                name: "preview".to_owned(),
-            })
-            .is_some()
     );
 
     let descriptor = CapabilityDescriptor {

@@ -455,8 +455,6 @@ Open application
 Open Project with Zed
 Run command
 Enable desktop tiling
-Wait for condition
-Verify resource
 Start Docker container
 Start Docker Compose stack
 Start Android Emulator
@@ -638,9 +636,6 @@ ActionKind
   start_container
   start_compose
   start_android_emulator
-  wait_for_condition
-  verify_resource
-  custom
 ```
 
 The exact Rust representation may use enums and tagged Serde data rather than a single flat TOML table, but the model must preserve these semantics. Avoid parallel arrays or positional relationships between unrelated collections.
@@ -1323,8 +1318,6 @@ Start Compose              action name, working directory, Compose file,
                            dependencies
 Start Android Emulator     action name, Android virtual device,
                            desktop workspace, dependencies
-Wait/verify                action name, readiness, dependencies
-Custom action              action name, dependencies
 ```
 
 `Open Project with Zed` is intentionally specialized. Its application is always Zed in the initial product, so the inspector must not show `Application`, `Working directory`, or `Execution mode` for this action. The project directory is configured through `Project path`, and the action may optionally target a desktop workspace.

@@ -9,8 +9,8 @@ use crate::{
     },
     domain::{
         ActionId, ActionKind, ActionSpec, CommandSpec, ComposeSpec, ContainerSpec, DomainError,
-        EmulatorSpec, EnvironmentConfig, ExecutionMode, ReadinessCheck, TilingPreference,
-        WorkspaceId, WorkspaceSpec, WorkspaceTarget,
+        EmulatorSpec, EnvironmentConfig, ExecutionMode, TilingPreference, WorkspaceId,
+        WorkspaceSpec, WorkspaceTarget,
     },
     error::{ErrorCategory, Result, WorkstateError},
     infrastructure::filesystem::PathResolver,
@@ -39,7 +39,6 @@ pub enum EditorField {
     ContainerImage,
     ComposeFile,
     EmulatorAvd,
-    ReadinessDelay,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +55,6 @@ pub enum InspectorField {
     ContainerImage,
     ComposeFile,
     EmulatorAvd,
-    ReadinessDelay,
     Dependencies,
 }
 
@@ -75,7 +73,6 @@ impl InspectorField {
             Self::ContainerImage => "Container image",
             Self::ComposeFile => "Compose file",
             Self::EmulatorAvd => "Device",
-            Self::ReadinessDelay => "Readiness delay",
             Self::Dependencies => "Depends on",
         }
     }
@@ -200,20 +197,6 @@ pub fn action_palette() -> Vec<ActionPaletteEntry> {
         ActionPaletteEntry {
             label: "Start Android Emulator",
             kind: ActionKind::StartAndroidEmulator,
-        },
-        ActionPaletteEntry {
-            label: "Wait for condition",
-            kind: ActionKind::WaitForCondition,
-        },
-        ActionPaletteEntry {
-            label: "Verify resource",
-            kind: ActionKind::VerifyResource,
-        },
-        ActionPaletteEntry {
-            label: "Custom action",
-            kind: ActionKind::Custom {
-                name: "custom-action".to_owned(),
-            },
         },
     ]
 }
@@ -434,10 +417,6 @@ impl EditorState {
                     InspectorField::DesktopWorkspace,
                 ]);
             }
-            ActionKind::WaitForCondition | ActionKind::VerifyResource => {
-                fields.push(InspectorField::ReadinessDelay);
-            }
-            ActionKind::Custom { .. } => {}
         }
         fields.push(InspectorField::Dependencies);
         fields
@@ -519,11 +498,6 @@ impl EditorState {
                 .emulator
                 .as_ref()
                 .map(|emulator| emulator.avd.clone())
-                .unwrap_or_else(|| "not set".to_owned()),
-            InspectorField::ReadinessDelay => action
-                .readiness_checks
-                .first()
-                .map(readiness_label)
                 .unwrap_or_else(|| "not set".to_owned()),
             InspectorField::Dependencies => {
                 if action.depends_on.is_empty() {
@@ -853,44 +827,6 @@ impl EditorState {
         Ok(())
     }
 
-    pub fn set_action_readiness_delay(
-        &mut self,
-        action_id: &ActionId,
-        value: String,
-    ) -> Result<()> {
-        let milliseconds = value.parse::<u64>().map_err(|_| {
-            WorkstateError::new(
-                ErrorCategory::Ui,
-                "readiness delay must be a positive number of milliseconds",
-            )
-        })?;
-        if milliseconds == 0 {
-            return Err(WorkstateError::new(
-                ErrorCategory::Ui,
-                "readiness delay must be a positive number of milliseconds",
-            ));
-        }
-        let action = self.action_mut(action_id)?;
-        if !matches!(
-            &action.kind,
-            ActionKind::WaitForCondition | ActionKind::VerifyResource
-        ) {
-            return Err(WorkstateError::new(
-                ErrorCategory::Ui,
-                format!("readiness checks are not available for action '{action_id}'"),
-            ));
-        }
-        if let Some(check) = action.readiness_checks.first_mut() {
-            *check = ReadinessCheck::Delay { milliseconds };
-        } else {
-            action
-                .readiness_checks
-                .push(ReadinessCheck::Delay { milliseconds });
-        }
-        self.mark_dirty();
-        Ok(())
-    }
-
     pub fn add_dependency(&mut self, action_id: &ActionId, dependency_id: &ActionId) -> Result<()> {
         if action_id == dependency_id {
             return Err(WorkstateError::new(
@@ -1184,7 +1120,6 @@ impl EditorState {
                 file_catalog,
             ),
             InspectorField::EmulatorAvd => self.open_emulator_picker(),
-            InspectorField::ReadinessDelay => self.begin_input(EditorField::ReadinessDelay),
             InspectorField::DesktopWorkspace => self.open_workspace_choice_picker(field),
             InspectorField::ExecutionMode => self.open_execution_mode_picker(),
             InspectorField::Tiling => self.open_tiling_picker(),
@@ -1805,11 +1740,6 @@ impl EditorState {
                 .map(|action| action.id.clone())
                 .ok_or_else(|| WorkstateError::new(ErrorCategory::Ui, "no action is selected"))
                 .and_then(|action_id| self.set_action_emulator_avd(&action_id, value)),
-            EditorField::ReadinessDelay => self
-                .selected_action_spec()
-                .map(|action| action.id.clone())
-                .ok_or_else(|| WorkstateError::new(ErrorCategory::Ui, "no action is selected"))
-                .and_then(|action_id| self.set_action_readiness_delay(&action_id, value)),
         };
         if let Err(error) = result {
             self.record_notice(error.to_string());
@@ -1898,20 +1828,6 @@ impl EditorState {
                         .emulator
                         .as_ref()
                         .map(|emulator| emulator.avd.clone())
-                })
-                .unwrap_or_default(),
-            EditorField::ReadinessDelay => self
-                .selected_action_spec()
-                .and_then(|action| {
-                    action
-                        .readiness_checks
-                        .first()
-                        .and_then(|check| match check {
-                            ReadinessCheck::Delay { milliseconds } => {
-                                Some(milliseconds.to_string())
-                            }
-                            _ => None,
-                        })
                 })
                 .unwrap_or_default(),
         };
@@ -2042,10 +1958,7 @@ impl EditorState {
     }
 
     fn next_action_id(&self, kind: &ActionKind) -> Result<ActionId> {
-        let raw_base = match kind {
-            ActionKind::Custom { name } => name.clone(),
-            _ => kind.key(),
-        };
+        let raw_base = kind.key();
         let base = raw_base
             .chars()
             .map(|character| {
@@ -2460,9 +2373,6 @@ fn action_label(action: &ActionSpec) -> String {
         ActionKind::StartContainer => "Start Docker container".to_owned(),
         ActionKind::StartCompose => "Start Docker Compose stack".to_owned(),
         ActionKind::StartAndroidEmulator => "Start Android Emulator".to_owned(),
-        ActionKind::WaitForCondition => "Wait for condition".to_owned(),
-        ActionKind::VerifyResource => "Verify resource".to_owned(),
-        ActionKind::Custom { name } => format!("Custom action: {name}"),
     }
 }
 
@@ -2501,37 +2411,18 @@ fn validation_field(error: &DomainError) -> Option<InspectorField> {
             "container.image" => Some(InspectorField::ContainerImage),
             "compose" | "compose.compose_file" => Some(InspectorField::ComposeFile),
             "emulator" | "emulator.avd" => Some(InspectorField::EmulatorAvd),
-            "readiness_checks" => Some(InspectorField::ReadinessDelay),
             _ => None,
         },
         DomainError::InvalidActionTimeout { .. } | DomainError::InvalidRetryPolicy { .. } => None,
         DomainError::InvalidExecutionMode { .. } => Some(InspectorField::ExecutionMode),
         DomainError::InvalidCommand { .. } => Some(InspectorField::Command),
-        DomainError::InvalidReadinessCheck { .. } => Some(InspectorField::ReadinessDelay),
+        DomainError::InvalidReadinessCheck { .. } => None,
         _ => None,
     }
 }
 
 fn command_label(command: &CommandSpec) -> String {
     command.display_line()
-}
-
-fn readiness_label(check: &ReadinessCheck) -> String {
-    match check {
-        ReadinessCheck::None => "none".to_owned(),
-        ReadinessCheck::Tcp { host, port, .. } => format!("TCP {host}:{port}"),
-        ReadinessCheck::Http { url, .. } => format!("HTTP {url}"),
-        ReadinessCheck::Command { command, .. } => format!("command {}", command_label(command)),
-        ReadinessCheck::Delay { milliseconds } => format!("{milliseconds} ms"),
-        ReadinessCheck::Container { name, .. } => format!("container {name}"),
-        ReadinessCheck::Compose { services, .. } => {
-            if services.is_empty() {
-                "Compose services".to_owned()
-            } else {
-                format!("Compose {}", services.join(", "))
-            }
-        }
-    }
 }
 
 fn workspace_target_label(workspace: &WorkspaceSpec) -> String {
@@ -2725,7 +2616,7 @@ mod tests {
     #[test]
     fn palette_contains_the_capability_oriented_mvp_actions() {
         let palette = action_palette();
-        assert_eq!(palette.len(), 10);
+        assert_eq!(palette.len(), 7);
         assert!(
             palette
                 .iter()
@@ -2736,7 +2627,6 @@ mod tests {
                 .iter()
                 .any(|entry| entry.label == "Start Docker Compose stack")
         );
-        assert!(palette.iter().any(|entry| entry.label == "Custom action"));
         assert!(
             palette
                 .iter()
@@ -2842,12 +2732,12 @@ mod tests {
             return;
         };
         let mut editor = EditorState::new(configuration, EditorMode::Create);
-        let first = editor.add_action_from_palette(9);
+        let first = editor.add_action_from_palette(2);
         assert!(first.is_ok());
         let Some(first) = first.ok() else {
             return;
         };
-        let second = editor.add_action_from_palette(9);
+        let second = editor.add_action_from_palette(2);
         assert!(second.is_ok());
         let Some(second) = second.ok() else {
             return;
@@ -2860,7 +2750,7 @@ mod tests {
         assert!(editor.add_dependency(&first, &second).is_ok());
         assert_eq!(
             editor.dependency_path(&first),
-            vec!["custom-action -> custom-action-2".to_owned()]
+            vec!["run-command -> run-command-2".to_owned()]
         );
         assert!(editor.remove_dependency(&first, &second).is_ok());
         assert!(editor.dependency_path(&first).is_empty());
@@ -3413,7 +3303,7 @@ mod tests {
             return;
         };
         let mut editor = EditorState::new(configuration, EditorMode::Create);
-        assert!(editor.add_action_from_palette(9).is_ok());
+        assert!(editor.add_action_from_palette(2).is_ok());
         assert_eq!(editor.panel, EditorPanel::Actions);
         assert_eq!(editor.handle_key(KeyCode::Right), super::EditorAction::None);
         assert_eq!(editor.panel, EditorPanel::Inspector);
@@ -3435,7 +3325,7 @@ mod tests {
             return;
         };
         let mut editor = EditorState::new(configuration, EditorMode::Create);
-        assert!(editor.add_action_from_palette(9).is_ok());
+        assert!(editor.add_action_from_palette(2).is_ok());
         editor.panel = EditorPanel::Inspector;
 
         assert_eq!(

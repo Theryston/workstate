@@ -477,8 +477,6 @@ impl EmulatorSpec {
     }
 }
 
-pub type CustomParameters = BTreeMap<String, String>;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ActionParameters {
     #[serde(default)]
@@ -495,8 +493,6 @@ pub struct ActionParameters {
     pub compose: Option<ComposeSpec>,
     #[serde(default)]
     pub emulator: Option<EmulatorSpec>,
-    #[serde(default)]
-    pub custom: CustomParameters,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -510,11 +506,6 @@ pub enum ActionKind {
     StartContainer,
     StartCompose,
     StartAndroidEmulator,
-    WaitForCondition,
-    VerifyResource,
-    Custom {
-        name: String,
-    },
 }
 
 impl ActionKind {
@@ -527,9 +518,6 @@ impl ActionKind {
             Self::StartContainer => "start_container".to_owned(),
             Self::StartCompose => "start_compose".to_owned(),
             Self::StartAndroidEmulator => "start_android_emulator".to_owned(),
-            Self::WaitForCondition => "wait_for_condition".to_owned(),
-            Self::VerifyResource => "verify_resource".to_owned(),
-            Self::Custom { name } => format!("custom:{name}"),
         }
     }
 }
@@ -792,35 +780,6 @@ impl ActionSpec {
                 emulator.validate_for(action_id)?;
                 reject_execution_mode(self, action_id)?;
             }
-            ActionKind::WaitForCondition | ActionKind::VerifyResource => {
-                if self.readiness_checks.is_empty() {
-                    return Err(DomainError::MissingActionParameter {
-                        action_id: action_id.to_string(),
-                        parameter: "readiness_checks".to_owned(),
-                    });
-                }
-                reject_execution_mode(self, action_id)?;
-            }
-            ActionKind::Custom { name } => {
-                if name.is_empty() || name.chars().any(char::is_control) {
-                    return Err(DomainError::InvalidActionParameter {
-                        action_id: action_id.to_string(),
-                        parameter: "custom.name".to_owned(),
-                    });
-                }
-                if let Some(mode) = self.execution_mode
-                    && mode == ExecutionMode::Background
-                    && self.parameters.command.is_none()
-                {
-                    return Err(DomainError::InvalidExecutionMode {
-                        action_id: action_id.to_string(),
-                        message: "a background custom action must provide a command".to_owned(),
-                    });
-                }
-                if let Some(command) = &self.parameters.command {
-                    command.validate_for(action_id)?;
-                }
-            }
         }
 
         Ok(())
@@ -890,11 +849,13 @@ mod tests {
 
     #[test]
     fn readiness_checks_validate_their_required_values() {
-        let action = ActionSpec::new("health", ActionKind::VerifyResource).ok();
+        let action = ActionSpec::new("health", ActionKind::RunCommand).ok();
         assert!(action.is_some());
         let Some(mut action) = action else {
             return;
         };
+        action.parameters.command = Some(CommandSpec::new("true"));
+        action.execution_mode = Some(ExecutionMode::RunOnce);
         action.readiness_checks.push(ReadinessCheck::Tcp {
             host: "127.0.0.1".to_owned(),
             port: 8080,

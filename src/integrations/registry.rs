@@ -330,8 +330,6 @@ impl IntegrationRegistry {
                 "android",
                 [CapabilityId::AndroidEmulator, CapabilityId::Adb],
             ),
-            ActionHandlerDescriptor::new("wait_for_condition", "core", []),
-            ActionHandlerDescriptor::new("verify_resource", "core", []),
         ];
 
         for handler in handlers {
