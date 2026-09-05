@@ -81,8 +81,10 @@ impl FakeTmux {
                     .unwrap_or(&window.process.program)
                     .to_owned(),
             ),
+            start_command: Some(window.process.program),
             working_directory: window.process.working_directory,
             process_id: Some(1_000_u32.saturating_add(state.next_window as u32)),
+            is_dead: false,
         }
     }
 }

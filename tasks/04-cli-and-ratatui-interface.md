@@ -152,7 +152,6 @@ The action palette should use capability-oriented labels such as:
 Open application
 Open Project with Zed
 Run command
-Start service
 Configure tiling
 Start Docker container
 Start Docker Compose stack

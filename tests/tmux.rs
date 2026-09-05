@@ -282,6 +282,48 @@ async fn healthy_persistent_window_is_reused_without_claiming_a_duplicate() -> T
 }
 
 #[tokio::test]
+async fn package_manager_window_is_healthy_when_child_process_is_foreground() -> TestResult {
+    let runner: Arc<dyn ProcessRunner> = Arc::new(FakeProcessRunner::default());
+    let tmux = FakeTmux::default();
+    let tmux_view = tmux.clone();
+    let configuration = EnvironmentConfig::new("Personal Blog")?;
+    let mut action = action(&configuration, "api", ExecutionMode::Background)?;
+    let Some(command) = action.parameters.command.as_mut() else {
+        return Err(std::io::Error::other("missing command specification").into());
+    };
+    command.program = "yarn".to_owned();
+    command.arguments = vec!["start:dev".to_owned()];
+    tmux.insert_session(TmuxSessionSnapshot {
+        identity: "session-0".to_owned(),
+        name: session_name(&configuration.slug),
+        windows: vec![TmuxWindowSnapshot {
+            identity: "@0".to_owned(),
+            name: window_name(&action.id),
+            command: Some("node".to_owned()),
+            start_command: Some("yarn start:dev".to_owned()),
+            working_directory: Some(std::env::temp_dir()),
+            process_id: Some(42),
+            is_dead: false,
+        }],
+    })?;
+    let tmux: Arc<dyn TmuxBackend> = Arc::new(tmux);
+    let handler = command_handler(runner, tmux)?;
+
+    let result = handler
+        .start_background(&action, CancellationToken::new())
+        .await?;
+
+    assert!(!result.changed);
+    assert!(tmux_view.calls()?.iter().all(|call| {
+        !matches!(
+            call,
+            TmuxCall::CreateSession { .. } | TmuxCall::CreateWindow { .. }
+        )
+    }));
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_missing_owned_window_is_recreated_in_the_existing_session() -> TestResult {
     let runner: Arc<dyn ProcessRunner> = Arc::new(FakeProcessRunner::default());
     let tmux = FakeTmux::default();
@@ -374,15 +416,19 @@ async fn an_ambiguous_window_identity_fails_without_takeover() -> TestResult {
                 identity: "@0".to_owned(),
                 name: window_name(&action.id),
                 command: Some("bun".to_owned()),
+                start_command: Some("bun".to_owned()),
                 working_directory: Some(std::env::temp_dir()),
                 process_id: Some(1),
+                is_dead: false,
             },
             TmuxWindowSnapshot {
                 identity: "@1".to_owned(),
                 name: window_name(&action.id),
                 command: Some("bun".to_owned()),
+                start_command: Some("bun".to_owned()),
                 working_directory: Some(std::env::temp_dir()),
                 process_id: Some(2),
+                is_dead: false,
             },
         ],
     })?;
@@ -455,8 +501,10 @@ async fn an_existing_session_with_unmanaged_windows_is_preserved() -> TestResult
             identity: "@external".to_owned(),
             name: "external".to_owned(),
             command: Some("bash".to_owned()),
+            start_command: Some("bash".to_owned()),
             working_directory: Some(std::env::temp_dir()),
             process_id: Some(42),
+            is_dead: false,
         }],
     })?;
     let tmux: Arc<dyn TmuxBackend> = Arc::new(tmux);
@@ -496,8 +544,10 @@ async fn direct_cleanup_ignores_reused_resources() -> TestResult {
             identity: "@external".to_owned(),
             name: "external".to_owned(),
             command: Some("bash".to_owned()),
+            start_command: Some("bash".to_owned()),
             working_directory: Some(std::env::temp_dir()),
             process_id: Some(42),
+            is_dead: false,
         }],
     })?;
     let tmux: Arc<dyn TmuxBackend> = Arc::new(tmux);
@@ -557,6 +607,11 @@ async fn tmux_adapter_parses_sessions_and_quotes_structured_commands() -> TestRe
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].windows.len(), 2);
     assert_eq!(sessions[0].windows[0].process_id, Some(1234));
+    assert_eq!(
+        sessions[0].windows[1].start_command.as_deref(),
+        Some("yarn start:dev")
+    );
+    assert!(!sessions[0].windows[0].is_dead);
 
     let created = backend
         .create_session(
@@ -589,6 +644,21 @@ async fn missing_tmux_server_is_observed_as_an_empty_state() -> TestResult {
         status: Some(1),
         stdout: Vec::new(),
         stderr: b"no server running on /tmp/tmux-1000/default\n".to_vec(),
+    }]);
+    let runner: Arc<dyn ProcessRunner> = Arc::new(runner);
+    let backend = TmuxProcessBackend::new(runner, PathBuf::from("/usr/bin/tmux"))?;
+
+    assert!(backend.observe().await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_tmux_socket_is_observed_as_an_empty_state() -> TestResult {
+    let runner = FakeProcessRunner::with_responses([ProcessOutput {
+        status: Some(1),
+        stdout: Vec::new(),
+        stderr: b"error connecting to /tmp/tmux-1000/default (No such file or directory)\n"
+            .to_vec(),
     }]);
     let runner: Arc<dyn ProcessRunner> = Arc::new(runner);
     let backend = TmuxProcessBackend::new(runner, PathBuf::from("/usr/bin/tmux"))?;

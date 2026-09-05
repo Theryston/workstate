@@ -9,8 +9,10 @@ pub struct TmuxWindowSnapshot {
     pub identity: String,
     pub name: String,
     pub command: Option<String>,
+    pub start_command: Option<String>,
     pub working_directory: Option<PathBuf>,
     pub process_id: Option<u32>,
+    pub is_dead: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

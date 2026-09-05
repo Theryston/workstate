@@ -53,6 +53,7 @@ pub(crate) fn missing_target(output: &ProcessOutput) -> bool {
     [
         "no server running",
         "failed to connect to server",
+        "no such file or directory",
         "can't find session",
         "can't find window",
         "no such session",
@@ -69,7 +70,9 @@ pub(crate) fn no_server(output: &ProcessOutput) -> bool {
         String::from_utf8_lossy(&output.stderr)
     )
     .to_ascii_lowercase();
-    detail.contains("no server running") || detail.contains("failed to connect to server")
+    detail.contains("no server running")
+        || detail.contains("failed to connect to server")
+        || (detail.contains("error connecting to") && detail.contains("no such file or directory"))
 }
 
 pub(crate) fn readiness_timeout(session_name: &str, window_name: &str) -> WorkstateError {

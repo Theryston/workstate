@@ -454,7 +454,6 @@ The initial action vocabulary should be capability-oriented:
 Open application
 Open Project with Zed
 Run command
-Start service
 Enable desktop tiling
 Wait for condition
 Verify resource
@@ -633,7 +632,6 @@ ActionKind
   open_application
   open_project
   run_command
-  start_service
   configure_tiling
   start_container
   start_compose
@@ -1302,8 +1300,6 @@ Open application          action name, application, working directory,
 Open Project with Zed     action name, project path, desktop workspace,
                            dependencies
 Run command               action name, command, working directory,
-                           execution mode, dependencies
-Start service             action name, command, working directory,
                            execution mode, dependencies
 Configure tiling          action name, desktop workspace, tiling, dependencies
 Start container            action name, container, working directory, dependencies

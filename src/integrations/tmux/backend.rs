@@ -78,7 +78,7 @@ impl TmuxProcessBackend {
                     "list-windows".to_owned(),
                     "-a".to_owned(),
                     "-F".to_owned(),
-                    "#{session_id}\t#{session_name}\t#{window_id}\t#{window_name}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}".to_owned(),
+                    "#{session_id}\t#{session_name}\t#{window_id}\t#{window_name}\t#{pane_current_command}\t#{pane_start_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_dead}".to_owned(),
                 ],
                 working_directory: None,
                 environment: Vec::new(),
@@ -151,7 +151,7 @@ impl TmuxProcessBackend {
                     if session
                         .windows
                         .iter()
-                        .any(|window| window.name == window_name && window.command.is_some()) =>
+                        .any(|window| window.name == window_name && !window.is_dead) =>
                 {
                     return Ok((*session).clone());
                 }
@@ -246,9 +246,9 @@ fn parse_sessions(bytes: Vec<u8>) -> Result<Vec<TmuxSessionSnapshot>> {
     let mut sessions = BTreeMap::<String, TmuxSessionSnapshot>::new();
     for line in output.lines().filter(|line| !line.is_empty()) {
         let fields = line.split('\t').collect::<Vec<_>>();
-        if fields.len() != 7 {
+        if fields.len() != 9 {
             return Err(errors::malformed_data(format!(
-                "expected 7 tab-separated fields, received {}",
+                "expected 9 tab-separated fields, received {}",
                 fields.len()
             )));
         }
@@ -260,15 +260,24 @@ fn parse_sessions(bytes: Vec<u8>) -> Result<Vec<TmuxSessionSnapshot>> {
         ] {
             models::validate_identity(kind, value)?;
         }
-        let process_id = if fields[6].is_empty() {
+        let process_id = if fields[7].is_empty() {
             None
         } else {
-            Some(fields[6].parse::<u32>().map_err(|_| {
+            Some(fields[7].parse::<u32>().map_err(|_| {
                 errors::malformed_data(format!(
                     "pane PID '{}' is not an unsigned integer",
-                    fields[6]
+                    fields[7]
                 ))
             })?)
+        };
+        let is_dead = match fields[8] {
+            "0" => false,
+            "1" => true,
+            value => {
+                return Err(errors::malformed_data(format!(
+                    "pane dead flag '{value}' is not 0 or 1"
+                )));
+            }
         };
         let session_identity = fields[0].to_owned();
         let session_name = fields[1].to_owned();
@@ -276,8 +285,10 @@ fn parse_sessions(bytes: Vec<u8>) -> Result<Vec<TmuxSessionSnapshot>> {
             identity: fields[2].to_owned(),
             name: fields[3].to_owned(),
             command: (!fields[4].is_empty()).then(|| fields[4].to_owned()),
-            working_directory: (!fields[5].is_empty()).then(|| PathBuf::from(fields[5])),
+            start_command: (!fields[5].is_empty()).then(|| fields[5].to_owned()),
+            working_directory: (!fields[6].is_empty()).then(|| PathBuf::from(fields[6])),
             process_id,
+            is_dead,
         };
         let Some(session) = sessions.get_mut(&session_identity) else {
             sessions.insert(

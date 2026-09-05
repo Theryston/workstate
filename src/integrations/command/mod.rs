@@ -16,8 +16,8 @@ use crate::{
         },
     },
     domain::{
-        ActionKind, ActionSpec, EnvironmentSlug, ExecutionMode, OwnershipStatus, ResourceIdentity,
-        ResourceKind, ResourceRecord,
+        ActionId, ActionKind, ActionSpec, CommandSpec, EnvironmentSlug, ExecutionMode,
+        OwnershipStatus, ResourceIdentity, ResourceKind, ResourceRecord,
     },
     error::{ErrorCategory, Result, WorkstateError},
     infrastructure::{filesystem::PathResolver, process::command_spec::to_process_request},
@@ -49,7 +49,7 @@ impl CommandActionHandler {
         tmux: Arc<dyn TmuxBackend>,
         file_system: Arc<dyn FileSystem>,
     ) -> Result<Self> {
-        if !matches!(key, "run_command" | "start_service") {
+        if key != "run_command" {
             return Err(WorkstateError::new(
                 ErrorCategory::Integration,
                 format!("unsupported command action handler key '{key}'"),
@@ -72,7 +72,7 @@ impl CommandActionHandler {
     fn action_matches(&self, action: &ActionSpec) -> bool {
         matches!(
             (&action.kind, self.key),
-            (ActionKind::RunCommand, "run_command") | (ActionKind::StartService, "start_service")
+            (ActionKind::RunCommand, "run_command")
         )
     }
 
@@ -822,16 +822,46 @@ fn window_record(
 }
 
 fn window_is_healthy(window: &TmuxWindowSnapshot, request: &ProcessRequest) -> bool {
-    let command_matches = window
-        .command
-        .as_deref()
-        .is_none_or(|command| executable_name(command) == executable_name(&request.program));
+    if window.is_dead {
+        return false;
+    }
+    let expected_program = executable_name(&request.program);
+    let observed_commands = [window.command.as_deref(), window.start_command.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let command_matches = observed_commands.is_empty()
+        || observed_commands
+            .iter()
+            .any(|command| command_matches_program(command, expected_program));
     let directory_matches = window
         .working_directory
         .as_ref()
         .zip(request.working_directory.as_ref())
         .is_none_or(|(actual, expected)| actual == expected);
     command_matches && directory_matches
+}
+
+fn command_matches_program(command_line: &str, expected_program: &str) -> bool {
+    let Some(action_id) = ActionId::new("tmux-observation").ok() else {
+        return false;
+    };
+    let Ok(command) = CommandSpec::from_argv_line(&action_id, command_line) else {
+        return false;
+    };
+    let program = if command.program == "env" {
+        let mut arguments = command.arguments.iter();
+        if arguments.next().is_some_and(|argument| argument == "--") {
+            arguments
+                .find(|argument| !argument.contains('='))
+                .map(String::as_str)
+        } else {
+            None
+        }
+    } else {
+        Some(command.program.as_str())
+    };
+    program.is_some_and(|program| executable_name(program) == expected_program)
 }
 
 fn executable_name(value: &str) -> &str {
@@ -898,15 +928,8 @@ pub fn register_handlers(
     file_system: Arc<dyn FileSystem>,
 ) -> Result<()> {
     let session_lock = Arc::new(tokio::sync::Mutex::new(()));
-    for key in ["run_command", "start_service"] {
-        let handler = CommandActionHandler::new(
-            key,
-            Arc::clone(&process_runner),
-            Arc::clone(&tmux),
-            Arc::clone(&file_system),
-        )?
-        .with_session_lock(Arc::clone(&session_lock));
-        registry.register(handler)?;
-    }
+    let handler = CommandActionHandler::new("run_command", process_runner, tmux, file_system)?
+        .with_session_lock(session_lock);
+    registry.register(handler)?;
     Ok(())
 }

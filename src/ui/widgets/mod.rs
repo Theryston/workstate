@@ -918,7 +918,6 @@ fn action_label(action: &ActionSpec) -> String {
         ActionKind::OpenApplication => "Open application".to_owned(),
         ActionKind::OpenProject => "Open Project with Zed".to_owned(),
         ActionKind::RunCommand => "Run command".to_owned(),
-        ActionKind::StartService => "Start service".to_owned(),
         ActionKind::ConfigureTiling => "Configure tiling".to_owned(),
         ActionKind::StartContainer => "Start Docker container".to_owned(),
         ActionKind::StartCompose => "Start Docker Compose stack".to_owned(),

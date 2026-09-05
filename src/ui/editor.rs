@@ -114,6 +114,10 @@ impl PathInputState {
             .map(|suggestion| suggestion.value.clone())
     }
 
+    fn selected_value_for_navigation(&self) -> Option<String> {
+        self.selected_value().map(append_directory_separator)
+    }
+
     fn move_selection(&mut self, offset: isize) {
         if self.suggestions.is_empty() {
             self.selected = None;
@@ -180,10 +184,6 @@ pub fn action_palette() -> Vec<ActionPaletteEntry> {
         ActionPaletteEntry {
             label: "Run command",
             kind: ActionKind::RunCommand,
-        },
-        ActionPaletteEntry {
-            label: "Start service",
-            kind: ActionKind::StartService,
         },
         ActionPaletteEntry {
             label: "Configure tiling",
@@ -378,7 +378,7 @@ impl EditorState {
                 InspectorField::ProjectPath,
                 InspectorField::DesktopWorkspace,
             ]),
-            ActionKind::RunCommand | ActionKind::StartService => fields.extend([
+            ActionKind::RunCommand => fields.extend([
                 InspectorField::Command,
                 InspectorField::WorkingDirectory,
                 InspectorField::ExecutionMode,
@@ -652,12 +652,7 @@ impl EditorState {
         mode: Option<ExecutionMode>,
     ) -> Result<()> {
         let action = self.action_mut(action_id)?;
-        if mode.is_some()
-            && !matches!(
-                &action.kind,
-                ActionKind::RunCommand | ActionKind::StartService
-            )
-        {
+        if mode.is_some() && !matches!(&action.kind, ActionKind::RunCommand) {
             return Err(WorkstateError::new(
                 ErrorCategory::Ui,
                 format!(
@@ -710,10 +705,7 @@ impl EditorState {
         command: Option<CommandSpec>,
     ) -> Result<()> {
         let action = self.action_mut(action_id)?;
-        if !matches!(
-            &action.kind,
-            ActionKind::RunCommand | ActionKind::StartService
-        ) {
+        if !matches!(&action.kind, ActionKind::RunCommand) {
             return Err(WorkstateError::new(
                 ErrorCategory::Ui,
                 format!("command is not available for action '{action_id}'"),
@@ -1564,12 +1556,23 @@ impl EditorState {
                 self.complete_selected_path(directory_catalog);
             }
             KeyCode::Enter => {
+                let selected_value = self
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.path_completion.as_ref())
+                    .and_then(PathInputState::selected_value);
                 let path_state = self.input.as_ref().and_then(|input| {
                     input.path_completion.as_ref().map(|completion| {
                         (input.value.is_empty(), completion.validation_error.clone())
                     })
                 });
-                if path_state.as_ref().is_some_and(|(is_empty, _)| *is_empty) {
+                if let Some(selected_value) = selected_value {
+                    if let Some(mut input) = self.input.take() {
+                        input.value = selected_value;
+                        input.cursor = input.value.chars().count();
+                        self.commit_input(input);
+                    }
+                } else if path_state.as_ref().is_some_and(|(is_empty, _)| *is_empty) {
                     self.record_notice("Cannot apply path: a directory is required.".to_owned());
                 } else if let Some(error) = path_state.and_then(|(_, error)| error) {
                     self.record_notice(format!("Cannot apply path: {error}"));
@@ -1611,7 +1614,11 @@ impl EditorState {
                 .selected_action_spec()
                 .map(|action| action.id.clone())
                 .ok_or_else(|| WorkstateError::new(ErrorCategory::Ui, "no action is selected"))
-                .and_then(|action_id| self.set_command(&action_id, Some(CommandSpec::new(value)))),
+                .and_then(|action_id| {
+                    CommandSpec::from_argv_line(&action_id, &value)
+                        .map_err(WorkstateError::from)
+                        .and_then(|command| self.set_command(&action_id, Some(command)))
+                }),
             EditorField::ContainerName => self
                 .selected_action_spec()
                 .map(|action| action.id.clone())
@@ -1670,7 +1677,7 @@ impl EditorState {
                         .parameters
                         .command
                         .as_ref()
-                        .map(|command| command.program.clone())
+                        .map(CommandSpec::display_line)
                 })
                 .unwrap_or_default(),
             EditorField::ContainerName => self
@@ -1742,7 +1749,7 @@ impl EditorState {
             .input
             .as_ref()
             .and_then(|input| input.path_completion.as_ref())
-            .and_then(PathInputState::selected_value)
+            .and_then(PathInputState::selected_value_for_navigation)
         else {
             return;
         };
@@ -2195,7 +2202,6 @@ fn action_label(action: &ActionSpec) -> String {
         ActionKind::OpenApplication => "Open application".to_owned(),
         ActionKind::OpenProject => "Open Project with Zed".to_owned(),
         ActionKind::RunCommand => "Run command".to_owned(),
-        ActionKind::StartService => "Start service".to_owned(),
         ActionKind::ConfigureTiling => "Configure tiling".to_owned(),
         ActionKind::StartContainer => "Start Docker container".to_owned(),
         ActionKind::StartCompose => "Start Docker Compose stack".to_owned(),
@@ -2252,11 +2258,7 @@ fn validation_field(error: &DomainError) -> Option<InspectorField> {
 }
 
 fn command_label(command: &CommandSpec) -> String {
-    if command.arguments.is_empty() {
-        command.program.clone()
-    } else {
-        format!("{} {}", command.program, command.arguments.join(" "))
-    }
+    command.display_line()
 }
 
 fn readiness_label(check: &ReadinessCheck) -> String {
@@ -2305,6 +2307,13 @@ fn execution_mode_label(mode: ExecutionMode) -> &'static str {
         ExecutionMode::RunOnce => "run once",
         ExecutionMode::Background => "background",
     }
+}
+
+fn append_directory_separator(mut value: String) -> String {
+    if !value.ends_with('/') && !value.ends_with('\\') {
+        value.push('/');
+    }
+    value
 }
 
 fn is_directory_field(field: EditorField) -> bool {
@@ -2380,13 +2389,27 @@ mod tests {
                     name: "Code".to_owned(),
                     value: "~/Code".to_owned(),
                 }],
-                "~/Code/" => vec![DirectorySuggestion {
-                    name: "api".to_owned(),
-                    value: "~/Code/api".to_owned(),
-                }],
+                "~/Code/" => vec![
+                    DirectorySuggestion {
+                        name: "Workspace".to_owned(),
+                        value: "~/Code/Workspace".to_owned(),
+                    },
+                    DirectorySuggestion {
+                        name: "api".to_owned(),
+                        value: "~/Code/api".to_owned(),
+                    },
+                ],
+                "~/Code/Workspace/" => Vec::new(),
                 _ => Vec::new(),
             };
-            let validation_error = if matches!(input, "~/" | "~/Code" | "~/Code/" | "~/Code/api") {
+            let validation_error = if matches!(
+                input,
+                "~/" | "~/Code"
+                    | "~/Code/"
+                    | "~/Code/Workspace"
+                    | "~/Code/Workspace/"
+                    | "~/Code/api"
+            ) {
                 None
             } else {
                 Some("path does not exist".to_owned())
@@ -2408,7 +2431,7 @@ mod tests {
     #[test]
     fn palette_contains_the_capability_oriented_mvp_actions() {
         let palette = action_palette();
-        assert_eq!(palette.len(), 11);
+        assert_eq!(palette.len(), 10);
         assert!(
             palette
                 .iter()
@@ -2425,6 +2448,7 @@ mod tests {
                 .iter()
                 .all(|entry| entry.label != "Create or select workspace")
         );
+        assert!(palette.iter().all(|entry| entry.label != "Start service"));
     }
 
     #[test]
@@ -2524,12 +2548,12 @@ mod tests {
             return;
         };
         let mut editor = EditorState::new(configuration, EditorMode::Create);
-        let first = editor.add_action_from_palette(10);
+        let first = editor.add_action_from_palette(9);
         assert!(first.is_ok());
         let Some(first) = first.ok() else {
             return;
         };
-        let second = editor.add_action_from_palette(10);
+        let second = editor.add_action_from_palette(9);
         assert!(second.is_ok());
         let Some(second) = second.ok() else {
             return;
@@ -2608,14 +2632,23 @@ mod tests {
             editor.input.as_ref().map(|input| input.field),
             Some(super::EditorField::CommandProgram)
         );
-        editor.handle_key(KeyCode::Char('b'));
+        for character in "bun i".chars() {
+            editor.handle_key(KeyCode::Char(character));
+        }
         editor.handle_key(KeyCode::Enter);
         assert_eq!(
             editor
                 .selected_action_spec()
                 .and_then(|action| action.parameters.command.as_ref())
                 .map(|command| command.program.as_str()),
-            Some("b")
+            Some("bun")
+        );
+        assert_eq!(
+            editor
+                .selected_action_spec()
+                .and_then(|action| action.parameters.command.as_ref())
+                .map(|command| command.arguments.clone()),
+            Some(vec!["i".to_owned()])
         );
         editor.handle_key(KeyCode::Down);
         editor.handle_key(KeyCode::Down);
@@ -2810,30 +2843,12 @@ mod tests {
         send_path_key(&mut editor, &catalog, KeyCode::Enter);
         send_path_key(&mut editor, &catalog, KeyCode::Down);
         send_path_key(&mut editor, &catalog, KeyCode::Enter);
-        assert!(
-            editor
-                .input
-                .as_ref()
-                .and_then(|input| input.path_completion.as_ref())
-                .and_then(|completion| completion.validation_error.as_ref())
-                .is_none()
-        );
-        send_path_key(&mut editor, &catalog, KeyCode::Enter);
-        assert!(editor.input.is_some());
         send_path_key(&mut editor, &catalog, KeyCode::Char('~'));
         send_path_key(&mut editor, &catalog, KeyCode::Char('/'));
-        send_path_key(&mut editor, &catalog, KeyCode::Down);
-        send_path_key(&mut editor, &catalog, KeyCode::Up);
         send_path_key(&mut editor, &catalog, KeyCode::Tab);
         assert_eq!(
             editor.input.as_ref().map(|input| input.value.as_str()),
-            Some("~/Code")
-        );
-        send_path_key(&mut editor, &catalog, KeyCode::Char('/'));
-        send_path_key(&mut editor, &catalog, KeyCode::Tab);
-        assert_eq!(
-            editor.input.as_ref().map(|input| input.value.as_str()),
-            Some("~/Code/api")
+            Some("~/Code/")
         );
         send_path_key(&mut editor, &catalog, KeyCode::Char('x'));
         assert!(
@@ -2851,21 +2866,104 @@ mod tests {
             Some("Cannot apply path: path does not exist")
         );
         send_path_key(&mut editor, &catalog, KeyCode::Backspace);
-        assert!(
-            editor
-                .input
-                .as_ref()
-                .and_then(|input| input.path_completion.as_ref())
-                .and_then(|completion| completion.validation_error.as_ref())
-                .is_none()
-        );
+        send_path_key(&mut editor, &catalog, KeyCode::Down);
+        send_path_key(&mut editor, &catalog, KeyCode::Up);
         send_path_key(&mut editor, &catalog, KeyCode::Enter);
         assert!(editor.input.is_none());
         assert_eq!(
             editor
                 .selected_action_spec()
                 .and_then(|action| action.parameters.project_path.as_deref()),
-            Some("~/Code/api")
+            Some("~/Code/Workspace")
+        );
+    }
+
+    #[test]
+    fn directory_tab_appends_a_separator_and_refreshes_nested_suggestions() {
+        let Some(mut configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let Some(action) = ActionSpec::new("open-project", ActionKind::OpenProject).ok() else {
+            return;
+        };
+        assert!(configuration.add_action(action).is_ok());
+        let catalog = FakeDirectoryCatalog;
+        let mut editor = EditorState::new(configuration, EditorMode::Create);
+
+        editor.begin_input_with_directory_catalog(EditorField::ProjectPath, Some(&catalog));
+        for character in "~/".chars() {
+            send_path_key(&mut editor, &catalog, KeyCode::Char(character));
+        }
+        send_path_key(&mut editor, &catalog, KeyCode::Tab);
+        assert_eq!(
+            editor.input.as_ref().map(|input| input.value.as_str()),
+            Some("~/Code/")
+        );
+        send_path_key(&mut editor, &catalog, KeyCode::Tab);
+        assert_eq!(
+            editor.input.as_ref().map(|input| input.value.as_str()),
+            Some("~/Code/Workspace/")
+        );
+    }
+
+    #[test]
+    fn directory_enter_uses_the_selected_suggestion_instead_of_the_typed_prefix() {
+        let Some(mut configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let Some(action) = ActionSpec::new("open-project", ActionKind::OpenProject).ok() else {
+            return;
+        };
+        assert!(configuration.add_action(action).is_ok());
+        let catalog = FakeDirectoryCatalog;
+        let mut editor = EditorState::new(configuration, EditorMode::Create);
+
+        editor.begin_input_with_directory_catalog(EditorField::ProjectPath, Some(&catalog));
+        for character in "~/Code/".chars() {
+            send_path_key(&mut editor, &catalog, KeyCode::Char(character));
+        }
+        send_path_key(&mut editor, &catalog, KeyCode::Down);
+        send_path_key(&mut editor, &catalog, KeyCode::Up);
+        send_path_key(&mut editor, &catalog, KeyCode::Enter);
+
+        assert!(editor.input.is_none());
+        assert_eq!(
+            editor
+                .selected_action_spec()
+                .and_then(|action| action.parameters.project_path.as_deref()),
+            Some("~/Code/Workspace")
+        );
+    }
+
+    #[test]
+    fn directory_fields_reject_invalid_paths_after_enter() {
+        let Some(mut configuration) = EnvironmentConfig::new("Blog").ok() else {
+            return;
+        };
+        let Some(action) = ActionSpec::new("open-project", ActionKind::OpenProject).ok() else {
+            return;
+        };
+        assert!(configuration.add_action(action).is_ok());
+        let catalog = FakeDirectoryCatalog;
+        let mut editor = EditorState::new(configuration, EditorMode::Create);
+
+        editor.begin_input_with_directory_catalog(EditorField::ProjectPath, Some(&catalog));
+        for character in "~/Missing".chars() {
+            send_path_key(&mut editor, &catalog, KeyCode::Char(character));
+        }
+        send_path_key(&mut editor, &catalog, KeyCode::Enter);
+        assert!(
+            editor
+                .input
+                .as_ref()
+                .and_then(|input| input.path_completion.as_ref())
+                .and_then(|completion| completion.validation_error.as_ref())
+                .is_some()
+        );
+        assert!(editor.input.is_some());
+        assert_eq!(
+            editor.notice.as_deref(),
+            Some("Cannot apply path: path does not exist")
         );
     }
 
@@ -2905,7 +3003,7 @@ mod tests {
             return;
         };
         let mut editor = EditorState::new(configuration, EditorMode::Create);
-        assert!(editor.add_action_from_palette(10).is_ok());
+        assert!(editor.add_action_from_palette(9).is_ok());
         assert_eq!(editor.panel, EditorPanel::Actions);
         assert_eq!(editor.handle_key(KeyCode::Right), super::EditorAction::None);
         assert_eq!(editor.panel, EditorPanel::Inspector);
@@ -2927,7 +3025,7 @@ mod tests {
             return;
         };
         let mut editor = EditorState::new(configuration, EditorMode::Create);
-        assert!(editor.add_action_from_palette(10).is_ok());
+        assert!(editor.add_action_from_palette(9).is_ok());
         editor.panel = EditorPanel::Inspector;
 
         assert_eq!(

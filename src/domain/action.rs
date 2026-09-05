@@ -136,6 +136,36 @@ impl CommandSpec {
         }
     }
 
+    pub fn from_argv_line(action_id: &ActionId, line: &str) -> Result<Self, DomainError> {
+        let tokens = tokenize_argv_line(line).map_err(|message| DomainError::InvalidCommand {
+            action_id: action_id.to_string(),
+            message,
+        })?;
+        let Some((program, arguments)) = tokens.split_first() else {
+            return Err(DomainError::InvalidCommand {
+                action_id: action_id.to_string(),
+                message: "the command must contain an executable".to_owned(),
+            });
+        };
+        let mut command = Self::new(program.clone());
+        command.arguments = arguments.to_vec();
+        Ok(command)
+    }
+
+    pub fn display_line(&self) -> String {
+        if self.shell {
+            return self.program.clone();
+        }
+        let mut tokens = Vec::with_capacity(self.arguments.len() + 1);
+        tokens.push(quote_argv_token(&self.program));
+        tokens.extend(
+            self.arguments
+                .iter()
+                .map(|argument| quote_argv_token(argument)),
+        );
+        tokens.join(" ")
+    }
+
     fn validate_for(&self, action_id: &ActionId) -> Result<(), DomainError> {
         if self.program.is_empty() || self.program.chars().any(char::is_control) {
             return Err(DomainError::InvalidCommand {
@@ -147,11 +177,11 @@ impl CommandSpec {
         if self
             .arguments
             .iter()
-            .any(|argument| argument.contains('\0'))
+            .any(|argument| argument.contains('\0') || argument.chars().any(char::is_control))
         {
             return Err(DomainError::InvalidCommand {
                 action_id: action_id.to_string(),
-                message: "arguments must not contain NUL characters".to_owned(),
+                message: "arguments must not contain control characters".to_owned(),
             });
         }
 
@@ -172,6 +202,99 @@ impl CommandSpec {
 
         Ok(())
     }
+}
+
+fn tokenize_argv_line(line: &str) -> std::result::Result<Vec<String>, String> {
+    if line.chars().any(char::is_control) {
+        return Err("the command must not contain control characters".to_owned());
+    }
+
+    let mut tokens = Vec::new();
+    let mut token = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut token_started = false;
+
+    for character in line.chars() {
+        if escaped {
+            token.push(character);
+            token_started = true;
+            escaped = false;
+            continue;
+        }
+
+        match quote {
+            Some('\'') => {
+                if character == '\'' {
+                    quote = None;
+                } else {
+                    token.push(character);
+                }
+            }
+            Some('"') => match character {
+                '"' => quote = None,
+                '\\' => escaped = true,
+                _ => token.push(character),
+            },
+            Some(_) => token.push(character),
+            None => match character {
+                '\\' => {
+                    escaped = true;
+                    token_started = true;
+                }
+                '\'' | '"' => {
+                    quote = Some(character);
+                    token_started = true;
+                }
+                character if character.is_whitespace() => {
+                    if token_started {
+                        tokens.push(std::mem::take(&mut token));
+                        token_started = false;
+                    }
+                }
+                _ => {
+                    token.push(character);
+                    token_started = true;
+                }
+            },
+        }
+    }
+
+    if escaped {
+        return Err("the command cannot end with an escape character".to_owned());
+    }
+    if quote.is_some() {
+        return Err("the command contains an unterminated quote".to_owned());
+    }
+    if token_started {
+        tokens.push(token);
+    }
+    if tokens.is_empty() {
+        return Err("the command must contain an executable".to_owned());
+    }
+    Ok(tokens)
+}
+
+fn quote_argv_token(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|character| !character.is_whitespace() && !matches!(character, '\'' | '"' | '\\'))
+    {
+        return value.to_owned();
+    }
+
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('\'');
+    for character in value.chars() {
+        if character == '\'' {
+            quoted.push_str("'\\''");
+        } else {
+            quoted.push(character);
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -327,15 +450,17 @@ pub struct ActionParameters {
 pub enum ActionKind {
     OpenApplication,
     OpenProject,
+    #[serde(alias = "start_service")]
     RunCommand,
-    StartService,
     ConfigureTiling,
     StartContainer,
     StartCompose,
     StartAndroidEmulator,
     WaitForCondition,
     VerifyResource,
-    Custom { name: String },
+    Custom {
+        name: String,
+    },
 }
 
 impl ActionKind {
@@ -344,7 +469,6 @@ impl ActionKind {
             Self::OpenApplication => "open_application".to_owned(),
             Self::OpenProject => "open_project".to_owned(),
             Self::RunCommand => "run_command".to_owned(),
-            Self::StartService => "start_service".to_owned(),
             Self::ConfigureTiling => "configure_tiling".to_owned(),
             Self::StartContainer => "start_container".to_owned(),
             Self::StartCompose => "start_compose".to_owned(),
@@ -560,7 +684,7 @@ impl ActionSpec {
                 require_text(&self.parameters.project_path, action_id, "project_path")?;
                 reject_execution_mode(self, action_id)?;
             }
-            ActionKind::RunCommand | ActionKind::StartService => {
+            ActionKind::RunCommand => {
                 let command = self.parameters.command.as_ref().ok_or_else(|| {
                     DomainError::MissingActionParameter {
                         action_id: action_id.to_string(),
@@ -685,8 +809,8 @@ fn default_max_attempts() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActionKind, ActionParameters, ActionSpec, CommandSpec, ExecutionMode, ReadinessCheck,
-        Timeout,
+        ActionId, ActionKind, ActionParameters, ActionSpec, CommandSpec, ExecutionMode,
+        ReadinessCheck, Timeout,
     };
 
     #[test]
@@ -737,5 +861,46 @@ mod tests {
         };
         action.execution_mode = Some(ExecutionMode::Background);
         assert!(action.validate().is_err());
+    }
+
+    #[test]
+    fn removed_start_service_kind_loads_as_run_command() {
+        let action = toml::from_str::<ActionSpec>("id = \"api\"\nkind = \"start_service\"\n");
+        assert!(action.is_ok());
+        let Some(action) = action.ok() else {
+            return;
+        };
+        assert_eq!(action.kind, ActionKind::RunCommand);
+        let serialized = toml::to_string(&action);
+        assert!(serialized.is_ok());
+        let Some(serialized) = serialized.ok() else {
+            return;
+        };
+        assert!(serialized.contains("kind = \"run_command\""));
+        assert!(!serialized.contains("start_service"));
+    }
+
+    #[test]
+    fn command_lines_are_split_without_enabling_shell_execution() {
+        let Some(action_id) = ActionId::new("run-command").ok() else {
+            return;
+        };
+        let command = CommandSpec::from_argv_line(&action_id, "bun run \"dev server\"");
+        assert!(command.is_ok());
+        let Some(command) = command.ok() else {
+            return;
+        };
+        assert_eq!(command.program, "bun");
+        assert_eq!(command.arguments, vec!["run", "dev server"]);
+        assert!(!command.shell);
+        assert_eq!(command.display_line(), "bun run 'dev server'");
+    }
+
+    #[test]
+    fn command_lines_reject_unterminated_quotes() {
+        let Some(action_id) = ActionId::new("run-command").ok() else {
+            return;
+        };
+        assert!(CommandSpec::from_argv_line(&action_id, "bun \"dev").is_err());
     }
 }

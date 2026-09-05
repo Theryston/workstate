@@ -319,11 +319,6 @@ impl IntegrationRegistry {
                 [CapabilityId::BackgroundProcesses],
             ),
             ActionHandlerDescriptor::new(
-                "start_service",
-                "terminal",
-                [CapabilityId::BackgroundProcesses],
-            ),
-            ActionHandlerDescriptor::new(
                 "configure_tiling",
                 "desktop",
                 [CapabilityId::DesktopTiling],

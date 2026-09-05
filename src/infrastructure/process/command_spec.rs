@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::{
     application::ports::ProcessRequest,
-    domain::CommandSpec,
+    domain::{ActionId, CommandSpec},
     error::{ErrorCategory, Result, WorkstateError},
 };
 
@@ -10,7 +10,8 @@ pub fn to_process_request(
     specification: &CommandSpec,
     working_directory: Option<PathBuf>,
 ) -> Result<ProcessRequest> {
-    validate_specification(specification)?;
+    let specification = normalize_command_line(specification)?;
+    validate_specification(&specification)?;
     if specification.shell {
         if !specification.arguments.is_empty() {
             return Err(WorkstateError::new(
@@ -22,7 +23,7 @@ pub fn to_process_request(
             program: shell_program(),
             arguments: vec!["-c".to_owned(), specification.program.clone()],
             working_directory,
-            environment: environment_entries(specification),
+            environment: environment_entries(&specification),
         });
     }
 
@@ -30,8 +31,26 @@ pub fn to_process_request(
         program: specification.program.clone(),
         arguments: specification.arguments.clone(),
         working_directory,
-        environment: environment_entries(specification),
+        environment: environment_entries(&specification),
     })
+}
+
+fn normalize_command_line(specification: &CommandSpec) -> Result<CommandSpec> {
+    if specification.shell
+        || !specification.arguments.is_empty()
+        || !specification.program.chars().any(char::is_whitespace)
+    {
+        return Ok(specification.clone());
+    }
+
+    let action_id = ActionId::new("command").map_err(WorkstateError::from)?;
+    CommandSpec::from_argv_line(&action_id, &specification.program)
+        .map_err(WorkstateError::from)
+        .map(|mut command| {
+            command.environment = specification.environment.clone();
+            command.shell = specification.shell;
+            command
+        })
 }
 
 fn validate_specification(specification: &CommandSpec) -> Result<()> {
@@ -135,5 +154,17 @@ mod tests {
         command.shell = true;
         command.arguments.push("unexpected".to_owned());
         assert!(to_process_request(&command, None).is_err());
+    }
+
+    #[test]
+    fn a_command_line_saved_as_the_program_is_recovered_as_argv() {
+        let command = CommandSpec::new("bun i");
+        let request = to_process_request(&command, None);
+        assert!(request.is_ok());
+        let Some(request) = request.ok() else {
+            return;
+        };
+        assert_eq!(request.program, "bun");
+        assert_eq!(request.arguments, vec!["i"]);
     }
 }
