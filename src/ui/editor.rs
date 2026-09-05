@@ -174,32 +174,8 @@ pub struct ActionPaletteEntry {
 pub fn action_palette() -> Vec<ActionPaletteEntry> {
     vec![
         ActionPaletteEntry {
-            label: "Open application",
-            kind: ActionKind::OpenApplication,
-        },
-        ActionPaletteEntry {
             label: "Open Project with Zed",
             kind: ActionKind::OpenProject,
-        },
-        ActionPaletteEntry {
-            label: "Run command",
-            kind: ActionKind::RunCommand,
-        },
-        ActionPaletteEntry {
-            label: "Configure tiling",
-            kind: ActionKind::ConfigureTiling,
-        },
-        ActionPaletteEntry {
-            label: "Start Docker container",
-            kind: ActionKind::StartContainer,
-        },
-        ActionPaletteEntry {
-            label: "Start Docker Compose stack",
-            kind: ActionKind::StartCompose,
-        },
-        ActionPaletteEntry {
-            label: "Start Android Emulator",
-            kind: ActionKind::StartAndroidEmulator,
         },
         ActionPaletteEntry {
             label: "Open Project with VS Code",
@@ -208,6 +184,30 @@ pub fn action_palette() -> Vec<ActionPaletteEntry> {
         ActionPaletteEntry {
             label: "Open Project with Cursor",
             kind: ActionKind::OpenProjectWithCursor,
+        },
+        ActionPaletteEntry {
+            label: "Open a Custom APP",
+            kind: ActionKind::OpenApplication,
+        },
+        ActionPaletteEntry {
+            label: "Run a Custom Command",
+            kind: ActionKind::RunCommand,
+        },
+        ActionPaletteEntry {
+            label: "Configure Workspace Tiling",
+            kind: ActionKind::ConfigureTiling,
+        },
+        ActionPaletteEntry {
+            label: "Start Docker Container",
+            kind: ActionKind::StartContainer,
+        },
+        ActionPaletteEntry {
+            label: "Start Docker Compose",
+            kind: ActionKind::StartCompose,
+        },
+        ActionPaletteEntry {
+            label: "Start Android Emulator",
+            kind: ActionKind::StartAndroidEmulator,
         },
     ]
 }
@@ -2603,8 +2603,8 @@ mod tests {
     };
 
     use super::{
-        EditorField, EditorMode, EditorPanel, EditorState, InspectorField, SaveOutcome,
-        action_palette,
+        ActionPaletteEntry, EditorField, EditorMode, EditorPanel, EditorState, InspectorField,
+        SaveOutcome, action_palette,
     };
 
     struct FakeDirectoryCatalog;
@@ -2703,33 +2703,47 @@ mod tests {
     #[test]
     fn palette_contains_the_capability_oriented_mvp_actions() {
         let palette = action_palette();
-        assert_eq!(palette.len(), 9);
-        assert!(
-            palette
-                .iter()
-                .any(|entry| entry.label == "Open Project with Zed")
+        assert_eq!(
+            palette,
+            vec![
+                ActionPaletteEntry {
+                    label: "Open Project with Zed",
+                    kind: ActionKind::OpenProject,
+                },
+                ActionPaletteEntry {
+                    label: "Open Project with VS Code",
+                    kind: ActionKind::OpenProjectWithVsCode,
+                },
+                ActionPaletteEntry {
+                    label: "Open Project with Cursor",
+                    kind: ActionKind::OpenProjectWithCursor,
+                },
+                ActionPaletteEntry {
+                    label: "Open a Custom APP",
+                    kind: ActionKind::OpenApplication,
+                },
+                ActionPaletteEntry {
+                    label: "Run a Custom Command",
+                    kind: ActionKind::RunCommand,
+                },
+                ActionPaletteEntry {
+                    label: "Configure Workspace Tiling",
+                    kind: ActionKind::ConfigureTiling,
+                },
+                ActionPaletteEntry {
+                    label: "Start Docker Container",
+                    kind: ActionKind::StartContainer,
+                },
+                ActionPaletteEntry {
+                    label: "Start Docker Compose",
+                    kind: ActionKind::StartCompose,
+                },
+                ActionPaletteEntry {
+                    label: "Start Android Emulator",
+                    kind: ActionKind::StartAndroidEmulator,
+                },
+            ]
         );
-        assert!(
-            palette
-                .iter()
-                .any(|entry| entry.label == "Open Project with VS Code")
-        );
-        assert!(
-            palette
-                .iter()
-                .any(|entry| entry.label == "Open Project with Cursor")
-        );
-        assert!(
-            palette
-                .iter()
-                .any(|entry| entry.label == "Start Docker Compose stack")
-        );
-        assert!(
-            palette
-                .iter()
-                .all(|entry| entry.label != "Create or select workspace")
-        );
-        assert!(palette.iter().all(|entry| entry.label != "Start service"));
     }
 
     #[test]
@@ -2738,7 +2752,7 @@ mod tests {
             return;
         };
         let mut editor = EditorState::new(configuration, EditorMode::Create);
-        let action_id = editor.add_action_from_palette(1);
+        let action_id = editor.add_action_from_palette(0);
         assert!(action_id.is_ok());
         let Some(action_id) = action_id.ok() else {
             return;
@@ -2829,12 +2843,12 @@ mod tests {
             return;
         };
         let mut editor = EditorState::new(configuration, EditorMode::Create);
-        let first = editor.add_action_from_palette(2);
+        let first = editor.add_action_from_palette(4);
         assert!(first.is_ok());
         let Some(first) = first.ok() else {
             return;
         };
-        let second = editor.add_action_from_palette(2);
+        let second = editor.add_action_from_palette(4);
         assert!(second.is_ok());
         let Some(second) = second.ok() else {
             return;
@@ -2949,9 +2963,9 @@ mod tests {
             return;
         };
         let mut editor = EditorState::new(configuration, EditorMode::Create);
-        let first = editor.add_action_from_palette(2);
+        let first = editor.add_action_from_palette(4);
         assert!(first.is_ok());
-        let second = editor.add_action_from_palette(2);
+        let second = editor.add_action_from_palette(4);
         assert!(second.is_ok());
 
         assert_eq!(editor.panel, EditorPanel::Actions);
@@ -3186,7 +3200,7 @@ mod tests {
                     name: "Browser".to_owned(),
                 },
             ]);
-        assert!(editor.add_action_from_palette(0).is_ok());
+        assert!(editor.add_action_from_palette(3).is_ok());
         editor.handle_key(KeyCode::Enter);
         editor.handle_key(KeyCode::Down);
         editor.handle_key(KeyCode::Enter);
@@ -3218,7 +3232,7 @@ mod tests {
             return;
         };
         let mut editor = EditorState::new(configuration, EditorMode::Create);
-        let action_id = editor.add_action_from_palette(0);
+        let action_id = editor.add_action_from_palette(3);
         assert!(action_id.is_ok());
         assert_eq!(
             editor.inspector_fields(),
@@ -3477,7 +3491,7 @@ mod tests {
             return;
         };
         let mut editor = EditorState::new(configuration, EditorMode::Create);
-        assert!(editor.add_action_from_palette(2).is_ok());
+        assert!(editor.add_action_from_palette(4).is_ok());
         assert_eq!(editor.panel, EditorPanel::Actions);
         assert_eq!(editor.handle_key(KeyCode::Right), super::EditorAction::None);
         assert_eq!(editor.panel, EditorPanel::Inspector);
@@ -3499,7 +3513,7 @@ mod tests {
             return;
         };
         let mut editor = EditorState::new(configuration, EditorMode::Create);
-        assert!(editor.add_action_from_palette(2).is_ok());
+        assert!(editor.add_action_from_palette(4).is_ok());
         editor.panel = EditorPanel::Inspector;
 
         assert_eq!(
