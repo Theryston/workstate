@@ -1522,6 +1522,13 @@ Check the Docker Desktop service and inspect the environment log at:
 
 Avoid vague messages such as `Something went wrong`.
 
+Human CLI failures must be rendered at the output boundary as a compact bordered
+error card. The card must separate the error category, primary message, actionable
+next step, and structured diagnostics; use semantic symbols, restrained terminal
+colors, and wrapping that keeps the card readable at normal terminal widths.
+`--no-color` must keep the same structure without ANSI sequences. JSON errors must
+remain machine-readable and must not use the human card.
+
 ### 20.3 stdout, stderr, and machine output
 
 Interactive progress belongs in the TUI and human-readable output. Errors and diagnostics may be written to stderr according to the CLI output policy.
@@ -1651,6 +1658,20 @@ Before considering a change complete, verify:
 - unsupported platforms fail before mutation;
 - TUI terminal state is restored on success and failure;
 - tests cover new behavior with fake backends.
+
+## 23.1 Release automation
+
+Release automation is defined by `.github/workflows/release.yml` and `release-plz.toml`.
+
+- `release-plz` updates the package version and `CHANGELOG.md` in git-only mode;
+- the project is not published to crates.io by the release pipeline;
+- release-worthy commits use the Conventional Commit prefixes `feat`, `fix`, `perf`, `refactor`, or `docs`, optionally followed by a scope;
+- the release workflow runs on pushes to `main`, commits the generated release changes as `chore(release): v<version>`, creates the annotated `v<version>` tag, and publishes the GitHub Release;
+- release jobs must not overwrite an existing version tag;
+- every release includes `workstate-x86_64-unknown-linux-gnu.tar.gz`, `workstate-aarch64-unknown-linux-gnu.tar.gz`, and `checksums-sha256.txt`;
+- the release matrix currently targets only Linux GNU `x86_64` and `aarch64`;
+- the build must compile the exact tagged release commit before its artifacts are uploaded;
+- the workflow must keep the GitHub token scoped to repository contents and must not require a custom release secret for normal operation.
 
 ## 24. Change workflow for coding agents
 

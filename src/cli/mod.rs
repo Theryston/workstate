@@ -549,9 +549,11 @@ fn environment_not_found(argument: &str) -> WorkstateError {
 fn environment_already_exists(argument: &str) -> WorkstateError {
     WorkstateError::new(
         ErrorCategory::Persistence,
-        format!(
-            "environment '{argument}' already exists. To edit it, use:\n  workstate edit {argument}"
-        ),
+        format!("environment '{argument}' already exists"),
+    )
+    .with_context(
+        "next_action",
+        format!("Edit it with: workstate edit {argument}"),
     )
 }
 
