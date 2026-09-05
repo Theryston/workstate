@@ -75,14 +75,34 @@ impl DockerProcessBackend {
         desktop_program: Option<PathBuf>,
         compose_program: Option<PathBuf>,
     ) -> Result<Self> {
-        let desktop = Arc::new(DockerDesktopController::new(
+        Self::new_for_platform(
+            Arc::clone(&process_runner),
+            file_system,
+            docker_program,
+            desktop_program,
+            compose_program,
+            cfg!(target_os = "linux"),
+        )
+    }
+
+    pub fn new_for_platform(
+        process_runner: Arc<dyn ProcessRunner>,
+        file_system: Arc<dyn FileSystem>,
+        docker_program: PathBuf,
+        desktop_program: Option<PathBuf>,
+        compose_program: Option<PathBuf>,
+        linux_user_services: bool,
+    ) -> Result<Self> {
+        let desktop = Arc::new(DockerDesktopController::new_with_platform(
             Arc::clone(&process_runner),
             desktop_program,
+            linux_user_services,
         ));
-        let engine = Arc::new(DockerEngineController::new(
+        let engine = Arc::new(DockerEngineController::new_for_platform(
             Arc::clone(&process_runner),
             docker_program,
-            desktop,
+            Arc::clone(&desktop),
+            linux_user_services,
         )?);
         let compose = Arc::new(DockerComposeController::new(
             engine.clone(),
@@ -183,6 +203,7 @@ impl DockerProcessBackend {
                     timeout: DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
                     poll_interval: self.poll_interval,
                     action: request.context.clone(),
+                    environment: self.engine.environment(),
                 },
                 cancellation.clone(),
             )
@@ -666,6 +687,7 @@ impl DockerProcessBackend {
                     timeout: DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
                     poll_interval: self.poll_interval,
                     action: request.context.clone(),
+                    environment: request.environment.clone(),
                 },
                 cancellation.clone(),
             )
@@ -1113,6 +1135,28 @@ impl DockerProcessBackend {
         cancellation.check()?;
         let mut outputs = Vec::new();
         let mut conflict_detected = false;
+        let engine_resources = if request.compose.is_some() || request.specification.is_some() {
+            let environment = request
+                .compose
+                .as_ref()
+                .map(|compose| compose.environment.clone())
+                .unwrap_or_else(|| self.engine.environment());
+            self.engine
+                .ensure_ready(
+                    DockerEngineRequest {
+                        launch_desktop_when_needed: true,
+                        timeout: DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
+                        poll_interval: self.poll_interval,
+                        action: request.context.clone(),
+                        environment,
+                    },
+                    cancellation.clone(),
+                )
+                .await?
+                .resources
+        } else {
+            Vec::new()
+        };
         if let Some(compose_request) = &request.compose {
             let (compose_outputs, compose_conflict) = self
                 .stop_compose_owned(compose_request, &request.resources, cancellation.clone())
@@ -1201,9 +1245,11 @@ impl DockerProcessBackend {
                 }
             }
         }
+        let mut service_resources = request.resources.clone();
+        service_resources.extend(engine_resources);
         outputs.extend(
             self.engine
-                .stop_desktop(&request.resources, cancellation)
+                .stop_desktop(&service_resources, cancellation.clone())
                 .await?,
         );
         Ok(DockerEnsureOutcome {
@@ -1452,11 +1498,13 @@ impl DockerActionHandler {
         if let Some(file) = &specification.compose_file {
             specification.compose_file = Some(self.resolve_compose_file(&working_directory, file)?);
         }
+        let environment = compose_environment(&specification);
         Ok(DockerComposeRequest {
             context: self.context(action)?,
             specification,
             working_directory,
             readiness_checks: action.readiness_checks.clone(),
+            environment,
         })
     }
 
@@ -1836,6 +1884,24 @@ fn docker_compensation_result(outcome: DockerEnsureOutcome) -> Result<Compensati
     Ok(CompensationResult {
         outputs: outcome.outputs.into_iter().map(ActionOutput::log).collect(),
     })
+}
+
+fn compose_environment(specification: &crate::domain::ComposeSpec) -> Vec<(String, String)> {
+    let mut values = BTreeMap::new();
+    for command in [
+        specification.up_command.as_ref(),
+        specification.down_command.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for (key, value) in &command.environment {
+            if key.starts_with("DOCKER_") {
+                values.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    values.into_iter().collect()
 }
 
 fn docker_identity_from_output(bytes: &[u8]) -> Option<String> {

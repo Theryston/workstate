@@ -61,6 +61,7 @@ pub struct DockerEngineRequest {
     pub timeout: Duration,
     pub poll_interval: Duration,
     pub action: DockerActionContext,
+    pub environment: Vec<(String, String)>,
 }
 
 impl DockerEngineRequest {
@@ -70,6 +71,7 @@ impl DockerEngineRequest {
             timeout: DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
             poll_interval: Duration::from_millis(100),
             action,
+            environment: Vec::new(),
         }
     }
 }
@@ -88,6 +90,7 @@ pub struct DockerComposeRequest {
     pub specification: ComposeSpec,
     pub working_directory: PathBuf,
     pub readiness_checks: Vec<ReadinessCheck>,
+    pub environment: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -18,13 +18,22 @@ pub struct FakeProcessRunner {
 #[derive(Default)]
 struct FakeProcessState {
     requests: Vec<ProcessRequest>,
-    responses: VecDeque<ProcessOutput>,
+    responses: VecDeque<Result<ProcessOutput>>,
     background_requests: Vec<ProcessRequest>,
     next_identity: usize,
 }
 
 impl FakeProcessRunner {
     pub fn with_responses(responses: impl IntoIterator<Item = ProcessOutput>) -> Self {
+        let runner = Self::default();
+        if let Ok(mut state) = runner.state.lock() {
+            state.responses.extend(responses.into_iter().map(Ok));
+        }
+        runner
+    }
+
+    #[allow(dead_code)]
+    pub fn with_results(responses: impl IntoIterator<Item = Result<ProcessOutput>>) -> Self {
         let runner = Self::default();
         if let Ok(mut state) = runner.state.lock() {
             state.responses.extend(responses);
@@ -57,14 +66,13 @@ impl FakeProcessRunner {
         } else {
             state.requests.push(request);
         }
-        Ok(state
-            .responses
-            .pop_front()
-            .unwrap_or_else(|| ProcessOutput {
+        state.responses.pop_front().unwrap_or_else(|| {
+            Ok(ProcessOutput {
                 status: Some(0),
                 stdout: Vec::new(),
                 stderr: Vec::new(),
-            }))
+            })
+        })
     }
 }
 

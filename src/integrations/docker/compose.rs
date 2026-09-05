@@ -44,13 +44,20 @@ impl DockerComposeController {
         cancellation: CancellationToken,
     ) -> Result<DockerComposeObservation> {
         cancellation.check()?;
-        let engine = self.engine.inspect(cancellation.clone()).await?;
+        let engine = self
+            .engine
+            .inspect_with_environment(cancellation.clone(), request.environment.clone())
+            .await?;
         if !engine.ready {
             return Ok(DockerComposeObservation::Unavailable(engine));
         }
         let arguments = self.arguments(&request, ["ps", "--all", "--format", "json"])?;
         let output = self
-            .run(request.working_directory.clone(), arguments)
+            .run(
+                request.working_directory.clone(),
+                arguments,
+                request.environment.clone(),
+            )
             .await?;
         if !output.succeeded() {
             if is_missing_project(&output) {
@@ -83,13 +90,21 @@ impl DockerComposeController {
                 command,
                 Some(request.working_directory.clone()),
             )?;
-            return self.engine.run_process(process_request).await;
+            return self
+                .engine
+                .run_process(self.engine.complete_process_request(process_request))
+                .await;
         } else {
             let mut arguments = self.arguments(request, ["up", "--detach"])?;
             arguments.extend(request.specification.services.iter().cloned());
             arguments
         };
-        self.run(request.working_directory.clone(), arguments).await
+        self.run(
+            request.working_directory.clone(),
+            arguments,
+            request.environment.clone(),
+        )
+        .await
     }
 
     pub async fn down(
@@ -104,10 +119,18 @@ impl DockerComposeController {
                 command,
                 Some(request.working_directory.clone()),
             )?;
-            return self.engine.run_process(process_request).await;
+            return self
+                .engine
+                .run_process(self.engine.complete_process_request(process_request))
+                .await;
         }
         let arguments = self.arguments(request, ["down"])?;
-        self.run(request.working_directory.clone(), arguments).await
+        self.run(
+            request.working_directory.clone(),
+            arguments,
+            request.environment.clone(),
+        )
+        .await
     }
 
     fn arguments<const N: usize>(
@@ -136,19 +159,24 @@ impl DockerComposeController {
         &self,
         working_directory: PathBuf,
         arguments: Vec<String>,
+        environment: Vec<(String, String)>,
     ) -> Result<crate::application::ports::ProcessOutput> {
         if let Some(executable) = &self.standalone_executable {
             return self
                 .engine
-                .run_process(crate::application::ports::ProcessRequest {
-                    program: executable.display().to_string(),
-                    arguments,
-                    working_directory: Some(working_directory),
-                    environment: Vec::new(),
-                })
+                .run_process(self.engine.complete_process_request(
+                    crate::application::ports::ProcessRequest {
+                        program: executable.display().to_string(),
+                        arguments,
+                        working_directory: Some(working_directory),
+                        environment,
+                    },
+                ))
                 .await;
         }
-        self.engine.run(arguments, Some(working_directory)).await
+        self.engine
+            .run_with_environment(arguments, Some(working_directory), environment)
+            .await
     }
 }
 

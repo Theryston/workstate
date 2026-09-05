@@ -825,14 +825,36 @@ Docker support includes Docker Desktop, Docker Engine, direct containers, and Do
 
 ### 11.1 Docker readiness
 
-When an environment requires Docker:
+When an environment requires Docker, every Docker action must pass through the same
+`DockerEngineController` readiness preflight. The preflight is the only place that may
+decide whether a local Docker service should be started. It must:
 
-1. verify that the Docker CLI is available;
-2. detect whether Docker Desktop or the configured Docker service is active;
-3. start it through the Docker/platform backend only when the environment owns that startup;
-4. wait for `docker info` or the backend-equivalent readiness signal;
-5. show progress and a timeout;
-6. record ownership.
+1. execute `docker info` through the injected process runner;
+2. use the exact Docker CLI environment that the later action will use, including
+   `DOCKER_HOST`, `DOCKER_CONTEXT`, TLS settings, and Docker configuration paths;
+3. return immediately without starting services or changing context when the probe succeeds;
+4. inspect the selected context and endpoint conservatively when the probe fails;
+5. start `systemctl --user start docker-desktop` only for a detected Linux Docker Desktop
+   user service that is installed but inactive;
+6. start `systemctl --user start docker` only for a detected rootless user service that is
+   installed but inactive;
+7. never start a user service when the selected endpoint is an explicit global socket;
+8. never start local services for a remote context or `DOCKER_HOST` endpoint;
+9. never execute `sudo`, request a password, switch Docker context, change socket permissions,
+   or modify system groups;
+10. poll `docker info` until the selected engine is ready or the readiness timeout expires;
+11. record only services started by the current run as cleanup candidates;
+12. return targeted diagnostics for a missing CLI, invalid context, inaccessible remote host,
+   permission failure, stopped global service, startup failure, initialization timeout, and
+   unknown endpoint instead of guessing.
+
+The readiness preflight must be synchronized per process so concurrent Docker actions share the
+same startup decision and cannot start the same user service repeatedly. A ready probe must not
+perform service inspection as a side effect. Docker Compose and direct-container handlers must
+invoke this preflight before their first Docker operation, and all subsequent Docker commands
+must retain the same effective environment. The Linux systemd implementation belongs behind the
+Docker platform adapter; non-Linux backends must retain their own existing Docker Desktop launch
+mechanism and must never execute Linux `systemctl` commands.
 
 External Docker startup may take much longer than the internal `200 ms` performance target. The performance target applies to internal overhead, planning, detection, and dispatch, not the unavoidable readiness time of an external service.
 

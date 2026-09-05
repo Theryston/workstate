@@ -189,12 +189,13 @@ impl AppContext {
             .unwrap_or_else(|| PathBuf::from("docker"));
         let docker_desktop_program = platform_probe.executable("docker-desktop")?;
         let docker_compose_program = platform_probe.executable("docker-compose")?;
-        let docker_process_backend = Arc::new(DockerProcessBackend::new(
+        let docker_process_backend = Arc::new(DockerProcessBackend::new_for_platform(
             Arc::clone(&process_runner),
             Arc::clone(&file_system),
             docker_program,
             docker_desktop_program,
             docker_compose_program,
+            detected_platform.operating_system.is_linux(),
         )?);
         let container_backend: Arc<dyn ContainerBackend> = docker_process_backend.clone();
         let tmux_executable = match &detected_platform.terminal {
