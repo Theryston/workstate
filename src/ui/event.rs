@@ -2,7 +2,7 @@ use std::{future::Future, io, time::Duration};
 
 use crossterm::{
     cursor::{Hide, Show},
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEvent},
+    event::{self, Event, KeyEvent},
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -22,8 +22,7 @@ impl TerminalSession for CrosstermTerminalSession {
         terminal::enable_raw_mode()
             .map_err(|source| terminal_error("could not enable terminal raw mode", source))?;
 
-        if let Err(source) = execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture, Hide)
-        {
+        if let Err(source) = execute!(io::stdout(), EnterAlternateScreen, Hide) {
             let restore_result = self.restore();
             if let Err(error) = restore_result {
                 tracing::error!(error = %error, "terminal restoration failed after terminal setup error");
@@ -35,13 +34,8 @@ impl TerminalSession for CrosstermTerminalSession {
     }
 
     fn restore(&mut self) -> Result<()> {
-        let screen_result = execute!(
-            io::stdout(),
-            LeaveAlternateScreen,
-            DisableMouseCapture,
-            Show
-        )
-        .map_err(|source| terminal_error("could not restore the terminal screen", source));
+        let screen_result = execute!(io::stdout(), LeaveAlternateScreen, Show)
+            .map_err(|source| terminal_error("could not restore the terminal screen", source));
         let raw_mode_result = terminal::disable_raw_mode()
             .map_err(|source| terminal_error("could not disable terminal raw mode", source));
 
