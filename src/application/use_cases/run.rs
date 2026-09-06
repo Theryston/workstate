@@ -20,7 +20,7 @@ pub async fn execute(
     let configuration = load_environment(context, environment)?;
     let request = RunRequest::new(generate_run_id(context), dry_run)?;
     context
-        .lifecycle_engine(SchedulerOptions::default())
+        .lifecycle_engine(SchedulerOptions::default())?
         .run(&configuration, request, Default::default(), events)
         .await
 }

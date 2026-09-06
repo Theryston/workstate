@@ -250,6 +250,7 @@ data directory.
 | `start_container`           | Ensure a Docker container exists and is running    |
 | `start_compose`             | Ensure a Docker Compose project is running         |
 | `start_android_emulator`    | Start and verify an Android Virtual Device         |
+| `start_other_environment`   | Start and own another saved environment when needed |
 
 Actions can target a desktop workspace, depend on other actions, define working
 directories and environment variables, and include readiness checks.
@@ -300,6 +301,20 @@ depends_on = ["api"]
 [actions.parameters]
 application = "zed"
 project_path = "$HOME/Projects/personal-api"
+```
+
+To compose environments, add a `start_other_environment` action and select the
+target environment in the editor. The target environment is reconciled after
+its dependencies are ready and is stopped again only when this action started
+it and ownership is still safe to clean up:
+
+```toml
+[[actions]]
+id = "start-api-environment"
+kind = "start_other_environment"
+
+[actions.parameters]
+other_environment = "personal-api"
 ```
 
 The editor validates the configuration before saving it. Paths support both `~`

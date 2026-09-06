@@ -340,6 +340,7 @@ impl IntegrationRegistry {
                 "android",
                 [CapabilityId::AndroidEmulator, CapabilityId::Adb],
             ),
+            ActionHandlerDescriptor::new("start_other_environment", "environment", []),
         ];
 
         for handler in handlers {

@@ -462,6 +462,7 @@ Enable desktop tiling
 Start Docker container
 Start Docker Compose stack
 Start Android Emulator
+Start Other Environment
 Create background terminal window
 Custom integration action
 ```
@@ -642,6 +643,7 @@ ActionKind
   start_container
   start_compose
   start_android_emulator
+  start_other_environment
 ```
 
 The exact Rust representation may use enums and tagged Serde data rather than a single flat TOML table, but the model must preserve these semantics. Avoid parallel arrays or positional relationships between unrelated collections.
@@ -1352,6 +1354,7 @@ Start Compose              action name, working directory, Compose file,
                            dependencies
 Start Android Emulator     action name, Android virtual device,
                            desktop workspace, dependencies
+Start Other Environment    action name, target environment, dependencies
 ```
 
 `Open Project with Zed`, `Open Project with VS Code`, and `Open Project with Cursor` are intentionally specialized. Each action selects its editor profile internally, so the inspector must not show `Application`, `Working directory`, or `Execution mode` for these actions. The project directory is configured through `Project path`, and each action may optionally target a desktop workspace.

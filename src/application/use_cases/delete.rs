@@ -18,7 +18,7 @@ pub async fn execute(
     context.preflight()?;
     let configuration = load_environment(context, environment)?;
     context
-        .lifecycle_engine(SchedulerOptions::default())
+        .lifecycle_engine(SchedulerOptions::default())?
         .delete(&configuration, Default::default(), events)
         .await
 }

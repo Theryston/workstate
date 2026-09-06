@@ -184,13 +184,31 @@ pub fn render_progress(frame: &mut Frame<'_>, state: &ProgressState, theme: Them
 
     let logs = state
         .logs()
-        .map(|log| {
-            let prefix = log
+        .flat_map(|log| {
+            let action_label = log
                 .action_id
                 .as_ref()
-                .map(|id| format!("[{id}] "))
-                .unwrap_or_default();
-            ListItem::new(format!("{prefix}{}", log.message))
+                .and_then(|action_id| state.entry(action_id))
+                .map(|entry| entry.label.clone())
+                .unwrap_or_else(|| "Lifecycle".to_owned());
+            let message_lines = log.message.lines().collect::<Vec<_>>();
+            message_lines
+                .into_iter()
+                .enumerate()
+                .map(move |(line_index, message)| {
+                    if line_index > 0 {
+                        return ListItem::new(Line::from(vec![
+                            Span::styled("    ", theme.muted_style()),
+                            Span::styled(message.to_owned(), theme.text_style()),
+                        ]));
+                    }
+                    let (marker, marker_style, message_style) = progress_log_marker(message, theme);
+                    ListItem::new(Line::from(vec![
+                        Span::styled(format!("{action_label}  ·  "), theme.muted_style()),
+                        Span::styled(marker, marker_style),
+                        Span::styled(message.to_owned(), message_style),
+                    ]))
+                })
         })
         .collect::<Vec<_>>();
     frame.render_widget(
@@ -938,6 +956,7 @@ fn action_label(action: &ActionSpec) -> String {
         ActionKind::StartContainer => "Start Docker container".to_owned(),
         ActionKind::StartCompose => "Start Docker Compose stack".to_owned(),
         ActionKind::StartAndroidEmulator => "Start Android Emulator".to_owned(),
+        ActionKind::StartOtherEnvironment => "Start Other Environment".to_owned(),
     }
 }
 
@@ -970,6 +989,52 @@ fn progress_marker(status: ActionProgressStatus, spinner: &str) -> &str {
         ActionProgressStatus::Cancelled => "!",
         ActionProgressStatus::RollingBack => "↺",
     }
+}
+
+fn progress_log_marker(message: &str, theme: Theme) -> (&'static str, Style, Style) {
+    let trimmed = message.trim_start();
+    let lowercase = trimmed.to_ascii_lowercase();
+    if trimmed.starts_with('✗') || lowercase.contains("failed") {
+        return (
+            if trimmed.starts_with('✗') {
+                ""
+            } else {
+                "✗ "
+            },
+            theme.error_style(),
+            theme.error_style(),
+        );
+    }
+    if trimmed.starts_with('✓')
+        || lowercase.contains("ready")
+        || lowercase.contains("stopped")
+        || lowercase.contains("desired state")
+    {
+        return (
+            if trimmed.starts_with('✓') {
+                ""
+            } else {
+                "✓ "
+            },
+            theme.success_style(),
+            theme.success_style(),
+        );
+    }
+    if trimmed.starts_with('↺') || lowercase.starts_with("rolling back") {
+        return (
+            if trimmed.starts_with('↺') {
+                ""
+            } else {
+                "↺ "
+            },
+            theme.warning_style(),
+            theme.warning_style(),
+        );
+    }
+    if lowercase.starts_with("starting") || lowercase.starts_with("stopping") {
+        return ("▶ ", theme.warning_style(), theme.text_style());
+    }
+    ("· ", theme.muted_style(), theme.text_style())
 }
 
 fn field_label(field: super::editor::EditorField) -> &'static str {
@@ -1433,6 +1498,50 @@ mod tests {
             state.entry(&action.id).map(|entry| entry.status),
             Some(ActionProgressStatus::Running)
         );
+    }
+
+    #[test]
+    fn progress_activity_uses_action_names_and_structured_markers() {
+        let Some(mut configuration) = EnvironmentConfig::new("Orchestrator").ok() else {
+            return;
+        };
+        let Some(mut action) =
+            ActionSpec::new("start-api-environment", ActionKind::StartOtherEnvironment).ok()
+        else {
+            return;
+        };
+        action.display_label = Some("Start Other Environment".to_owned());
+        let action_id = action.id.clone();
+        assert!(configuration.add_action(action).is_ok());
+        let mut state = ProgressState::from_configuration(&configuration);
+        assert!(
+            state
+                .apply(ProgressEvent::Log {
+                    action_id: Some(action_id),
+                    message: "Starting other environment 'api'".to_owned(),
+                })
+                .is_ok()
+        );
+
+        let backend = TestBackend::new(200, 20);
+        let Ok(mut terminal) = Terminal::new(backend) else {
+            return;
+        };
+        let result = terminal.draw(|frame| render_progress(frame, &state, Theme::new(false)));
+        assert!(result.is_ok());
+        let Some(completed) = result.ok() else {
+            return;
+        };
+        let rendered = completed
+            .buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Start Other Environment"));
+        assert!(rendered.contains("Starting other environment 'api'"));
+        assert!(rendered.contains("▶"));
+        assert!(!rendered.contains("[start-api-environment]"));
     }
 
     #[test]

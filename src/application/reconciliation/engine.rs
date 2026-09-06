@@ -418,7 +418,16 @@ impl<'a> LifecycleEngine<'a> {
                 )
                 .await;
                 match result {
-                    Ok(_) => {
+                    Ok(compensation) => {
+                        for output in compensation.outputs {
+                            events
+                                .emit(ApplicationEvent::ActionOutput {
+                                    action_id: action_id.clone(),
+                                    stream: output.stream,
+                                    message: output.message,
+                                })
+                                .await?;
+                        }
                         for resource in &stoppable {
                             journal.mark_resource_cleaned(&resource.resource)?;
                             summary.cleaned_resources += 1;
@@ -450,7 +459,18 @@ impl<'a> LifecycleEngine<'a> {
                 )
                 .await;
                 match result {
-                    Ok(_) => journal.mark_compensated(action_id, &mutations)?,
+                    Ok(compensation) => {
+                        for output in compensation.outputs {
+                            events
+                                .emit(ApplicationEvent::ActionOutput {
+                                    action_id: action_id.clone(),
+                                    stream: output.stream,
+                                    message: output.message,
+                                })
+                                .await?;
+                        }
+                        journal.mark_compensated(action_id, &mutations)?;
+                    }
                     Err(error) => {
                         let error_message = format!(
                             "action '{action_id}' configuration restoration failed: {error}"

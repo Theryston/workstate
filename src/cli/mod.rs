@@ -318,13 +318,14 @@ async fn open_environment_editor(
     policy: &OutputPolicy,
     output: &mut dyn OutputSink,
 ) -> Result<()> {
+    let available_environments = load_selector_state(context)?.items().to_vec();
     let editor = match context.desktop_backend().snapshot().await {
-        Ok(snapshot) => {
-            EditorState::new(configuration, mode).with_live_workspaces(snapshot.workspaces)
-        }
-        Err(error) => {
-            EditorState::new(configuration, mode).with_workspace_observation_error(error.render())
-        }
+        Ok(snapshot) => EditorState::new(configuration, mode)
+            .with_available_environments(available_environments)
+            .with_live_workspaces(snapshot.workspaces),
+        Err(error) => EditorState::new(configuration, mode)
+            .with_available_environments(available_environments)
+            .with_workspace_observation_error(error.render()),
     };
     let editor = match context.application_catalog().list() {
         Ok(applications) => editor.with_installed_applications(applications),

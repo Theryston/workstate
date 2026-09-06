@@ -7,6 +7,7 @@ use super::DomainError;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceKind {
+    Environment,
     Application,
     DesktopWindow,
     DesktopWorkspace,
@@ -24,6 +25,7 @@ pub enum ResourceKind {
 impl Display for ResourceKind {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         let label = match self {
+            Self::Environment => "environment",
             Self::Application => "application",
             Self::DesktopWindow => "desktop_window",
             Self::DesktopWorkspace => "desktop_workspace",

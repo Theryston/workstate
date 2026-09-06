@@ -9,12 +9,14 @@ use crate::{
     },
     domain::{
         ActionId, ActionKind, ActionSpec, CommandSpec, ComposeSpec, ContainerSpec, DomainError,
-        EmulatorSpec, EnvironmentConfig, ExecutionMode, TilingPreference, WorkspaceId,
-        WorkspaceSpec, WorkspaceTarget,
+        EmulatorSpec, EnvironmentConfig, EnvironmentSlug, ExecutionMode, TilingPreference,
+        WorkspaceId, WorkspaceSpec, WorkspaceTarget,
     },
     error::{ErrorCategory, Result, WorkstateError},
     infrastructure::filesystem::PathResolver,
 };
+
+use super::state::EnvironmentListItem;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorMode {
@@ -45,6 +47,7 @@ pub enum EditorField {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InspectorField {
     ActionLabel,
+    OtherEnvironment,
     Application,
     ApplicationArguments,
     ProjectPath,
@@ -64,6 +67,7 @@ impl InspectorField {
     pub fn label(self) -> &'static str {
         match self {
             Self::ActionLabel => "Action name",
+            Self::OtherEnvironment => "Target environment",
             Self::Application => "Application",
             Self::ApplicationArguments => "Arguments",
             Self::ProjectPath => "Project path",
@@ -137,6 +141,7 @@ pub struct InspectorChoice {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InspectorChoiceValue {
+    OtherEnvironment(Option<EnvironmentSlug>),
     Application(Option<String>),
     Emulator(Option<String>),
     DesktopWorkspace(Option<WorkspaceId>),
@@ -209,6 +214,10 @@ pub fn action_palette() -> Vec<ActionPaletteEntry> {
             label: "Start Android Emulator",
             kind: ActionKind::StartAndroidEmulator,
         },
+        ActionPaletteEntry {
+            label: "Start Other Environment",
+            kind: ActionKind::StartOtherEnvironment,
+        },
     ]
 }
 
@@ -257,6 +266,7 @@ enum ValidationTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorState {
     pub configuration: EnvironmentConfig,
+    pub available_environments: Vec<EnvironmentListItem>,
     pub installed_applications: Vec<InstalledApplication>,
     pub application_observation_error: Option<String>,
     pub available_android_virtual_devices: Vec<AndroidVirtualDevice>,
@@ -292,6 +302,7 @@ impl EditorState {
         let selected_action = (!configuration.actions.is_empty()).then_some(0);
         Self {
             configuration,
+            available_environments: Vec::new(),
             installed_applications: Vec::new(),
             application_observation_error: None,
             available_android_virtual_devices: Vec::new(),
@@ -316,6 +327,15 @@ impl EditorState {
             validation_targets: Vec::new(),
             validation_feedback_active: false,
         }
+    }
+
+    pub fn with_available_environments(
+        mut self,
+        mut environments: Vec<EnvironmentListItem>,
+    ) -> Self {
+        environments.sort_by(|left, right| left.slug.cmp(&right.slug));
+        self.available_environments = environments;
+        self
     }
 
     pub fn with_installed_applications(
@@ -394,6 +414,9 @@ impl EditorState {
 
         let mut fields = vec![InspectorField::ActionLabel];
         match &action.kind {
+            ActionKind::StartOtherEnvironment => {
+                fields.push(InspectorField::OtherEnvironment);
+            }
             ActionKind::OpenApplication => fields.extend([
                 InspectorField::Application,
                 InspectorField::ApplicationArguments,
@@ -447,6 +470,12 @@ impl EditorState {
         };
         match field {
             InspectorField::ActionLabel => action_label(action),
+            InspectorField::OtherEnvironment => action
+                .parameters
+                .other_environment
+                .as_ref()
+                .map(|environment| self.environment_label(environment))
+                .unwrap_or_else(|| "not set".to_owned()),
             InspectorField::ProjectPath => action
                 .parameters
                 .project_path
@@ -649,6 +678,30 @@ impl EditorState {
     ) -> Result<()> {
         let action = self.action_mut(action_id)?;
         action.display_label = Some(label.into());
+        self.mark_dirty();
+        Ok(())
+    }
+
+    pub fn set_action_other_environment(
+        &mut self,
+        action_id: &ActionId,
+        environment: Option<EnvironmentSlug>,
+    ) -> Result<()> {
+        let current_environment = self.configuration.slug.clone();
+        let action = self.action_mut(action_id)?;
+        if !matches!(&action.kind, ActionKind::StartOtherEnvironment) {
+            return Err(WorkstateError::new(
+                ErrorCategory::Ui,
+                format!("environment selection is not available for action '{action_id}'"),
+            ));
+        }
+        if environment.as_ref() == Some(&current_environment) {
+            return Err(WorkstateError::new(
+                ErrorCategory::Ui,
+                "an action cannot start its own environment",
+            ));
+        }
+        action.parameters.other_environment = environment;
         self.mark_dirty();
         Ok(())
     }
@@ -1145,6 +1198,7 @@ impl EditorState {
             return;
         };
         match field {
+            InspectorField::OtherEnvironment => self.open_other_environment_picker(),
             InspectorField::ActionLabel => self.begin_input(EditorField::ActionDisplayLabel),
             InspectorField::Application => self.open_application_picker(),
             InspectorField::ApplicationArguments => {
@@ -1258,6 +1312,52 @@ impl EditorState {
         self.inspector_picker = Some(InspectorPicker::Choices {
             field: InspectorField::Application,
             title: "Application".to_owned(),
+            options,
+            selected,
+        });
+    }
+
+    fn open_other_environment_picker(&mut self) {
+        let Some(action) = self.selected_action_spec() else {
+            self.notice = Some("Select an action before choosing an environment.".to_owned());
+            return;
+        };
+        let current = action.parameters.other_environment.clone();
+        let own_environment = self.configuration.slug.clone();
+        let mut options = vec![InspectorChoice {
+            label: "No environment selected".to_owned(),
+            detail: Some("Leave the action unconfigured".to_owned()),
+            value: InspectorChoiceValue::OtherEnvironment(None),
+        }];
+        options.extend(
+            self.available_environments
+                .iter()
+                .filter(|environment| environment.slug != own_environment)
+                .map(|environment| InspectorChoice {
+                    label: environment.name.to_string(),
+                    detail: Some(format!("{} · {}", environment.slug, environment.status)),
+                    value: InspectorChoiceValue::OtherEnvironment(Some(environment.slug.clone())),
+                }),
+        );
+        if options.len() == 1 {
+            self.record_notice(
+                "No other environments are available. Create one with: workstate new <environment>"
+                    .to_owned(),
+            );
+            return;
+        }
+        let selected = options
+            .iter()
+            .position(|option| {
+                matches!(
+                    &option.value,
+                    InspectorChoiceValue::OtherEnvironment(value) if value == &current
+                )
+            })
+            .unwrap_or(0);
+        self.inspector_picker = Some(InspectorPicker::Choices {
+            field: InspectorField::OtherEnvironment,
+            title: InspectorField::OtherEnvironment.label().to_owned(),
             options,
             selected,
         });
@@ -1467,6 +1567,12 @@ impl EditorState {
                     return;
                 };
                 match choice.value {
+                    InspectorChoiceValue::OtherEnvironment(environment) => {
+                        let result = self.selected_action_id().and_then(|action_id| {
+                            self.set_action_other_environment(&action_id, environment)
+                        });
+                        self.record_error(result);
+                    }
                     InspectorChoiceValue::Application(application) => {
                         let result = self.selected_action_id().and_then(|action_id| {
                             self.set_action_application(&action_id, application)
@@ -2418,6 +2524,14 @@ impl EditorState {
             .map(|application| format!("{} ({})", application.name, application.id))
             .unwrap_or_else(|| application_id.to_owned())
     }
+
+    fn environment_label(&self, environment: &EnvironmentSlug) -> String {
+        self.available_environments
+            .iter()
+            .find(|candidate| &candidate.slug == environment)
+            .map(|candidate| format!("{} ({})", candidate.name, candidate.slug))
+            .unwrap_or_else(|| environment.to_string())
+    }
 }
 
 fn action_label(action: &ActionSpec) -> String {
@@ -2436,6 +2550,7 @@ fn action_label(action: &ActionSpec) -> String {
         ActionKind::StartContainer => "Start Docker container".to_owned(),
         ActionKind::StartCompose => "Start Docker Compose stack".to_owned(),
         ActionKind::StartAndroidEmulator => "Start Android Emulator".to_owned(),
+        ActionKind::StartOtherEnvironment => "Start Other Environment".to_owned(),
     }
 }
 
@@ -2475,6 +2590,9 @@ fn validation_field(error: &DomainError) -> Option<InspectorField> {
             "container.image" => Some(InspectorField::ContainerImage),
             "compose" | "compose.compose_file" => Some(InspectorField::ComposeFile),
             "emulator" | "emulator.avd" => Some(InspectorField::EmulatorAvd),
+            "other_environment" | "environment" | "target_environment" => {
+                Some(InspectorField::OtherEnvironment)
+            }
             _ => None,
         },
         DomainError::InvalidActionTimeout { .. } | DomainError::InvalidRetryPolicy { .. } => None,
@@ -2595,8 +2713,8 @@ mod tests {
             FileCatalog, InstalledApplication,
         },
         domain::{
-            ActionKind, ActionSpec, CommandSpec, EnvironmentConfig, ExecutionMode,
-            TilingPreference, WorkspaceTarget,
+            ActionKind, ActionSpec, CommandSpec, EnvironmentConfig, EnvironmentName,
+            EnvironmentSlug, ExecutionMode, TilingPreference, WorkspaceTarget,
         },
         error::Result,
         infrastructure::filesystem::local::LocalFileSystem,
@@ -2606,6 +2724,7 @@ mod tests {
         ActionPaletteEntry, EditorField, EditorMode, EditorPanel, EditorState, InspectorField,
         SaveOutcome, action_palette,
     };
+    use crate::ui::state::{EnvironmentListItem, EnvironmentStatus};
 
     struct FakeDirectoryCatalog;
 
@@ -2742,7 +2861,74 @@ mod tests {
                     label: "Start Android Emulator",
                     kind: ActionKind::StartAndroidEmulator,
                 },
+                ActionPaletteEntry {
+                    label: "Start Other Environment",
+                    kind: ActionKind::StartOtherEnvironment,
+                },
             ]
+        );
+    }
+
+    #[test]
+    fn start_other_environment_exposes_a_named_action_and_environment_picker() {
+        let Some(configuration) = EnvironmentConfig::new("Orchestrator").ok() else {
+            return;
+        };
+        let Some(target_name) = EnvironmentName::new("API").ok() else {
+            return;
+        };
+        let Some(target_slug) = EnvironmentSlug::new("api").ok() else {
+            return;
+        };
+        let mut editor = EditorState::new(configuration, EditorMode::Create)
+            .with_available_environments(vec![EnvironmentListItem::new(
+                target_name,
+                target_slug.clone(),
+                EnvironmentStatus::Stopped,
+            )]);
+        let Some(action_id) = editor.add_action_from_palette(9).ok() else {
+            return;
+        };
+
+        assert_eq!(
+            editor.inspector_fields(),
+            vec![
+                InspectorField::ActionLabel,
+                InspectorField::OtherEnvironment,
+                InspectorField::Dependencies,
+            ]
+        );
+        assert!(
+            editor
+                .set_action_other_environment(&action_id, Some(target_slug.clone()))
+                .is_ok()
+        );
+        assert_eq!(
+            editor.inspector_field_value(InspectorField::OtherEnvironment),
+            "API (api)"
+        );
+        editor.panel = EditorPanel::Inspector;
+        editor.selected_inspector = Some(1);
+        editor.handle_key(KeyCode::Enter);
+        assert!(editor.inspector_picker.is_some());
+        editor.handle_key(KeyCode::Enter);
+        assert!(editor.inspector_picker.is_none());
+        assert_eq!(
+            editor
+                .selected_action_spec()
+                .and_then(|action| action.parameters.other_environment.as_ref())
+                .map(ToString::to_string),
+            Some("api".to_owned())
+        );
+        assert!(
+            editor
+                .set_action_other_environment(&action_id, None)
+                .is_ok()
+        );
+        assert!(
+            editor
+                .set_action_other_environment(&action_id, Some(target_slug))
+                .is_ok()
         );
     }
 

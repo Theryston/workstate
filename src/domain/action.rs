@@ -505,6 +505,8 @@ pub struct ActionParameters {
     pub compose: Option<ComposeSpec>,
     #[serde(default)]
     pub emulator: Option<EmulatorSpec>,
+    #[serde(default, alias = "environment", alias = "target_environment")]
+    pub other_environment: Option<super::EnvironmentSlug>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -520,6 +522,7 @@ pub enum ActionKind {
     StartContainer,
     StartCompose,
     StartAndroidEmulator,
+    StartOtherEnvironment,
 }
 
 impl ActionKind {
@@ -534,6 +537,7 @@ impl ActionKind {
             Self::StartContainer => "start_container".to_owned(),
             Self::StartCompose => "start_compose".to_owned(),
             Self::StartAndroidEmulator => "start_android_emulator".to_owned(),
+            Self::StartOtherEnvironment => "start_other_environment".to_owned(),
         }
     }
 
@@ -812,6 +816,15 @@ impl ActionSpec {
                 emulator.validate_for(action_id)?;
                 reject_execution_mode(self, action_id)?;
             }
+            ActionKind::StartOtherEnvironment => {
+                if self.parameters.other_environment.is_none() {
+                    return Err(DomainError::MissingActionParameter {
+                        action_id: action_id.to_string(),
+                        parameter: "other_environment".to_owned(),
+                    });
+                }
+                reject_execution_mode(self, action_id)?;
+            }
         }
 
         Ok(())
@@ -944,6 +957,27 @@ mod tests {
 
         action.parameters.application_arguments = vec!["invalid\nargument".to_owned()];
         assert!(action.validate().is_err());
+    }
+
+    #[test]
+    fn start_other_environment_requires_and_persists_a_target_slug() {
+        let Some(mut action) = ActionSpec::new("start-api", ActionKind::StartOtherEnvironment).ok()
+        else {
+            return;
+        };
+        assert!(action.validate().is_err());
+        let Some(target) = crate::domain::EnvironmentSlug::new("api").ok() else {
+            return;
+        };
+        action.parameters.other_environment = Some(target);
+        assert!(action.validate().is_ok());
+        let serialized = toml::to_string(&action);
+        assert!(serialized.is_ok());
+        let Some(serialized) = serialized.ok() else {
+            return;
+        };
+        assert!(serialized.contains("kind = \"start_other_environment\""));
+        assert!(serialized.contains("other_environment = \"api\""));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -12,6 +13,7 @@ use crate::{
         desktop::{DesktopBackend, DesktopSnapshot},
         directories::DirectoryCatalog,
         editor::EditorBackend,
+        environment::EnvironmentLifecycleBackend,
         files::FileCatalog,
         filesystem::FileSystem,
         persistence::{ConfigStore, StateStore},
@@ -21,10 +23,16 @@ use crate::{
         tmux::TmuxBackend,
     },
     application::{
-        planner::{ActionHandlerRegistry, NoopReadinessCheckRunner, ReadinessCheckRunner},
-        reconciliation::{LifecycleEngine, ReconciliationEngine, SchedulerOptions},
+        planner::{
+            ActionHandlerRegistry, ActionOutput, ActionOutputSink, CancellationToken,
+            NoopReadinessCheckRunner, ReadinessCheckRunner,
+        },
+        reconciliation::{
+            ApplicationEvent, EventSink, LifecycleEngine, ReconciliationEngine, RunRequest,
+            SchedulerOptions,
+        },
     },
-    domain::{EnvironmentConfig, EnvironmentSlug, RuntimeState},
+    domain::{ActionId, ActionKind, ActionSpec, EnvironmentConfig, EnvironmentSlug, RuntimeState},
     error::{ErrorCategory, Result, WorkstateError},
     infrastructure::{
         filesystem::{LocalDirectoryCatalog, LocalFileCatalog, local::LocalFileSystem},
@@ -33,7 +41,7 @@ use crate::{
     },
     integrations::{
         CosmicBackend, DockerProcessBackend, IntegrationRegistry, ProjectEditorKind,
-        TmuxProcessBackend, ZedBackend,
+        StartOtherEnvironmentActionHandler, TmuxProcessBackend, ZedBackend,
         android::{AndroidBackend, AndroidTool, find_tool},
     },
     platform::{
@@ -395,34 +403,428 @@ impl AppContext {
         Arc::clone(&self.readiness_runner)
     }
 
-    pub fn reconciliation_engine(&self, options: SchedulerOptions) -> ReconciliationEngine<'_> {
-        ReconciliationEngine::with_clock_and_desktop(
+    pub fn reconciliation_engine(
+        &self,
+        options: SchedulerOptions,
+    ) -> Result<ReconciliationEngine<'_>> {
+        let handlers = self.action_handlers_with_environment(&options)?;
+        Ok(ReconciliationEngine::with_clock_and_desktop(
             self.integration_registry.as_ref(),
-            Arc::clone(&self.action_handlers),
+            handlers,
             Arc::clone(&self.readiness_runner),
             Arc::clone(&self.desktop_backend),
             Arc::clone(&self.clock),
             options,
-        )
+        ))
     }
 
-    pub fn lifecycle_engine(&self, options: SchedulerOptions) -> LifecycleEngine<'_> {
-        LifecycleEngine::new(
+    pub fn lifecycle_engine(&self, options: SchedulerOptions) -> Result<LifecycleEngine<'_>> {
+        let handlers = self.action_handlers_with_environment(&options)?;
+        Ok(LifecycleEngine::new(
             self.integration_registry.as_ref(),
-            Arc::clone(&self.action_handlers),
+            handlers,
             Arc::clone(&self.readiness_runner),
             Arc::clone(&self.clock),
             Arc::clone(&self.config_store),
             Arc::clone(&self.state_store),
             options,
         )
-        .with_desktop_backend(Arc::clone(&self.desktop_backend))
+        .with_desktop_backend(Arc::clone(&self.desktop_backend)))
+    }
+
+    fn action_handlers_with_environment(
+        &self,
+        scheduler_options: &SchedulerOptions,
+    ) -> Result<Arc<ActionHandlerRegistry>> {
+        let backend = Arc::new(ContextEnvironmentLifecycleBackend {
+            base_handlers: Arc::clone(&self.action_handlers),
+            config_store: Arc::clone(&self.config_store),
+            state_store: Arc::clone(&self.state_store),
+            integration_registry: Arc::clone(&self.integration_registry),
+            readiness_runner: Arc::clone(&self.readiness_runner),
+            clock: Arc::clone(&self.clock),
+            desktop_backend: Arc::clone(&self.desktop_backend),
+            environment_locks: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            environment_stack: Vec::new(),
+            scheduler_options: scheduler_options.clone(),
+        });
+        let mut handlers = self.action_handlers.as_ref().clone();
+        if handlers
+            .handler_for(&ActionKind::StartOtherEnvironment)
+            .is_none()
+        {
+            handlers.register(StartOtherEnvironmentActionHandler::new(backend))?;
+        }
+        Ok(Arc::new(handlers))
     }
 
     pub fn preflight(&self) -> Result<()> {
         let platform = self.platform_detector.detect()?;
         self.integration_registry.preflight(&platform)
     }
+}
+
+#[derive(Clone)]
+struct ContextEnvironmentLifecycleBackend {
+    base_handlers: Arc<ActionHandlerRegistry>,
+    config_store: Arc<dyn ConfigStore>,
+    state_store: Arc<dyn StateStore>,
+    integration_registry: Arc<IntegrationRegistry>,
+    readiness_runner: Arc<dyn ReadinessCheckRunner>,
+    clock: Arc<dyn Clock>,
+    desktop_backend: Arc<dyn DesktopBackend>,
+    environment_locks:
+        Arc<tokio::sync::Mutex<BTreeMap<EnvironmentSlug, Arc<tokio::sync::Mutex<()>>>>>,
+    environment_stack: Vec<EnvironmentSlug>,
+    scheduler_options: SchedulerOptions,
+}
+
+impl ContextEnvironmentLifecycleBackend {
+    fn load_configuration(&self, environment: &EnvironmentSlug) -> Result<EnvironmentConfig> {
+        self.config_store.load(environment)?.ok_or_else(|| {
+            WorkstateError::new(
+                ErrorCategory::Persistence,
+                format!("target environment '{environment}' was not found"),
+            )
+            .with_context("suggested_command", format!("workstate new {environment}"))
+        })
+    }
+
+    fn nested_handlers(&self, environment: &EnvironmentSlug) -> Result<Arc<ActionHandlerRegistry>> {
+        let mut handlers = self.base_handlers.as_ref().clone();
+        if handlers
+            .handler_for(&ActionKind::StartOtherEnvironment)
+            .is_none()
+        {
+            let mut nested_backend = self.clone();
+            nested_backend.environment_stack.push(environment.clone());
+            handlers.register(StartOtherEnvironmentActionHandler::new(Arc::new(
+                nested_backend,
+            )))?;
+        }
+        Ok(Arc::new(handlers))
+    }
+
+    fn ensure_not_recursive(&self, environment: &EnvironmentSlug) -> Result<()> {
+        if self
+            .environment_stack
+            .iter()
+            .any(|active| active == environment)
+        {
+            return Err(WorkstateError::new(
+                ErrorCategory::Domain,
+                format!("environment dependency cycle detected while reaching '{environment}'"),
+            )
+            .with_context(
+                "environment_chain",
+                self.environment_stack
+                    .iter()
+                    .map(ToString::to_string)
+                    .chain(std::iter::once(environment.to_string()))
+                    .collect::<Vec<_>>()
+                    .join(" -> "),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn lock_for(&self, environment: &EnvironmentSlug) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut locks = self.environment_locks.lock().await;
+            locks
+                .entry(environment.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        lock.lock_owned().await
+    }
+
+    fn nested_run_id(&self, environment: &EnvironmentSlug) -> String {
+        let timestamp = match self.clock.now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(duration) => duration.as_nanos(),
+            Err(_) => 0,
+        };
+        format!(
+            "run-{timestamp}-{}-nested-{environment}",
+            std::process::id()
+        )
+    }
+}
+
+impl EnvironmentLifecycleBackend for ContextEnvironmentLifecycleBackend {
+    fn exists(&self, environment: &EnvironmentSlug) -> Result<bool> {
+        self.config_store
+            .load(environment)
+            .map(|value| value.is_some())
+    }
+
+    fn is_active(&self, environment: &EnvironmentSlug) -> Result<bool> {
+        Ok(self
+            .state_store
+            .load(environment)?
+            .is_some_and(|state| state.status.is_active()))
+    }
+
+    fn start<'a>(
+        &'a self,
+        environment: &'a EnvironmentSlug,
+        cancellation: CancellationToken,
+        output: Arc<dyn ActionOutputSink>,
+    ) -> crate::application::ports::BoxFuture<'a, Result<bool>> {
+        Box::pin(async move {
+            cancellation.check()?;
+            self.ensure_not_recursive(environment)?;
+            let _environment_lock = self.lock_for(environment).await;
+            let configuration = self.load_configuration(environment)?;
+            let was_active = self.is_active(environment)?;
+            let handlers = self.nested_handlers(environment)?;
+            let events: Arc<dyn EventSink> = Arc::new(NestedEnvironmentEventSink::new(
+                environment.clone(),
+                &configuration,
+                output,
+                NestedEnvironmentOperation::Start,
+            ));
+            let request = RunRequest::new(self.nested_run_id(environment), false)?;
+            let engine = LifecycleEngine::new(
+                self.integration_registry.as_ref(),
+                handlers,
+                Arc::clone(&self.readiness_runner),
+                Arc::clone(&self.clock),
+                Arc::clone(&self.config_store),
+                Arc::clone(&self.state_store),
+                self.scheduler_options.clone(),
+            )
+            .with_desktop_backend(Arc::clone(&self.desktop_backend));
+            engine
+                .run(&configuration, request, cancellation, events)
+                .await?;
+            Ok(!was_active)
+        })
+    }
+
+    fn stop<'a>(
+        &'a self,
+        environment: &'a EnvironmentSlug,
+        cancellation: CancellationToken,
+        output: Arc<dyn ActionOutputSink>,
+    ) -> crate::application::ports::BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            cancellation.check()?;
+            self.ensure_not_recursive(environment)?;
+            let _environment_lock = self.lock_for(environment).await;
+            let configuration = self.load_configuration(environment)?;
+            let handlers = self.nested_handlers(environment)?;
+            let events: Arc<dyn EventSink> = Arc::new(NestedEnvironmentEventSink::new(
+                environment.clone(),
+                &configuration,
+                output,
+                NestedEnvironmentOperation::Stop,
+            ));
+            let engine = LifecycleEngine::new(
+                self.integration_registry.as_ref(),
+                handlers,
+                Arc::clone(&self.readiness_runner),
+                Arc::clone(&self.clock),
+                Arc::clone(&self.config_store),
+                Arc::clone(&self.state_store),
+                self.scheduler_options.clone(),
+            )
+            .with_desktop_backend(Arc::clone(&self.desktop_backend));
+            engine.stop(&configuration, cancellation, events).await?;
+            Ok(())
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum NestedEnvironmentOperation {
+    Start,
+    Stop,
+}
+
+struct NestedEnvironmentEventSink {
+    environment: EnvironmentSlug,
+    labels: BTreeMap<ActionId, String>,
+    output: Arc<dyn ActionOutputSink>,
+    operation: NestedEnvironmentOperation,
+}
+
+impl NestedEnvironmentEventSink {
+    fn new(
+        environment: EnvironmentSlug,
+        configuration: &EnvironmentConfig,
+        output: Arc<dyn ActionOutputSink>,
+        operation: NestedEnvironmentOperation,
+    ) -> Self {
+        let labels = configuration
+            .actions
+            .iter()
+            .map(|action| (action.id.clone(), action_display_label(action)))
+            .collect();
+        Self {
+            environment,
+            labels,
+            output,
+            operation,
+        }
+    }
+
+    fn action_label(&self, action_id: &ActionId) -> String {
+        self.labels
+            .get(action_id)
+            .cloned()
+            .unwrap_or_else(|| action_id.to_string())
+    }
+
+    fn indented(message: &str, prefix: &str) -> String {
+        message
+            .lines()
+            .map(|line| format!("{prefix}{line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn log_message(&self, message: impl Into<String>) -> ActionOutput {
+        ActionOutput::log(Self::indented(&message.into(), "  "))
+    }
+}
+
+impl EventSink for NestedEnvironmentEventSink {
+    fn emit<'a>(
+        &'a self,
+        event: ApplicationEvent,
+    ) -> crate::application::ports::BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let output = match event {
+                ApplicationEvent::ActionStarted {
+                    action_id, attempt, ..
+                } => {
+                    let attempt = if attempt > 1 {
+                        format!(" (attempt {attempt})")
+                    } else {
+                        String::new()
+                    };
+                    let verb = match self.operation {
+                        NestedEnvironmentOperation::Start => "Starting",
+                        NestedEnvironmentOperation::Stop => "Stopping",
+                    };
+                    self.log_message(format!(
+                        "↳ {verb} {}{attempt}",
+                        self.action_label(&action_id)
+                    ))
+                }
+                ApplicationEvent::ActionOutput {
+                    stream, message, ..
+                } => ActionOutput {
+                    stream,
+                    message: Self::indented(&message, "    "),
+                },
+                ApplicationEvent::ActionReady {
+                    action_id,
+                    already_correct,
+                } => {
+                    let status = match self.operation {
+                        NestedEnvironmentOperation::Start if already_correct => "already ready",
+                        NestedEnvironmentOperation::Start => "ready",
+                        NestedEnvironmentOperation::Stop => "stopped",
+                    };
+                    self.log_message(format!(
+                        "✓ {} {status}",
+                        self.action_label(&action_id)
+                    ))
+                }
+                ApplicationEvent::ActionSkipped { action_id, reason } => self.log_message(format!(
+                    "↷ {} skipped: {reason}",
+                    self.action_label(&action_id)
+                )),
+                ApplicationEvent::ActionFailed { action_id, error } => self.log_message(format!(
+                    "✗ {} failed: {error}",
+                    self.action_label(&action_id)
+                )),
+                ApplicationEvent::ActionCancelled { action_id, reason } => self.log_message(
+                    format!("! {} cancelled: {reason}", self.action_label(&action_id)),
+                ),
+                ApplicationEvent::RollbackStarted => {
+                    self.log_message("↺ Rolling back nested environment")
+                }
+                ApplicationEvent::RollbackActionStarted { action_id } => self.log_message(
+                    format!("↺ Rolling back {}", self.action_label(&action_id)),
+                ),
+                ApplicationEvent::RollbackActionCompleted {
+                    action_id,
+                    success,
+                    detail,
+                } => {
+                    let marker = if success { "✓" } else { "✗" };
+                    let detail = detail.map(|value| format!(": {value}")).unwrap_or_default();
+                    self.log_message(format!(
+                        "{marker} Rollback {} complete{detail}",
+                        self.action_label(&action_id)
+                    ))
+                }
+                ApplicationEvent::RollbackFinished { success } => self.log_message(if success {
+                    "Nested rollback completed"
+                } else {
+                    "Nested rollback failed"
+                }),
+                ApplicationEvent::ResourceCleanupSkipped { resource, reason } => self.log_message(
+                    format!("• Preserved {resource}: {reason}"),
+                ),
+                ApplicationEvent::RunCompleted { already_correct, .. } => {
+                    self.log_message(if already_correct {
+                        format!(
+                            "Environment '{}' was already in the desired state",
+                            self.environment
+                        )
+                    } else {
+                        format!("Environment '{}' is ready", self.environment)
+                    })
+                }
+                ApplicationEvent::RunFailed { error, .. } => self.log_message(format!(
+                    "✗ Environment '{}' failed: {error}",
+                    self.environment
+                )),
+                ApplicationEvent::StopCompleted {
+                    cleaned_resources,
+                    preserved_resources,
+                    ..
+                } => self.log_message(format!(
+                    "Environment '{}' stopped ({cleaned_resources} cleaned, {preserved_resources} preserved)",
+                    self.environment
+                )),
+                ApplicationEvent::StopFailed { error, .. } => self.log_message(format!(
+                    "✗ Environment '{}' stop failed: {error}",
+                    self.environment
+                )),
+                ApplicationEvent::RunStarted { .. }
+                | ApplicationEvent::PlanBuilt { .. }
+                | ApplicationEvent::ActionObserved { .. }
+                | ApplicationEvent::StopStarted { .. }
+                | ApplicationEvent::DeleteStarted { .. }
+                | ApplicationEvent::DeleteCompleted { .. } => return Ok(()),
+            };
+            self.output.emit(output).await
+        })
+    }
+}
+
+fn action_display_label(action: &ActionSpec) -> String {
+    action
+        .display_label
+        .clone()
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| match action.kind {
+            ActionKind::OpenApplication => "Open application".to_owned(),
+            ActionKind::OpenProject => "Open Project with Zed".to_owned(),
+            ActionKind::OpenProjectWithVsCode => "Open Project with VS Code".to_owned(),
+            ActionKind::OpenProjectWithCursor => "Open Project with Cursor".to_owned(),
+            ActionKind::RunCommand => "Run command".to_owned(),
+            ActionKind::ConfigureTiling => "Configure tiling".to_owned(),
+            ActionKind::StartContainer => "Start Docker container".to_owned(),
+            ActionKind::StartCompose => "Start Docker Compose stack".to_owned(),
+            ActionKind::StartAndroidEmulator => "Start Android Emulator".to_owned(),
+            ActionKind::StartOtherEnvironment => "Start Other Environment".to_owned(),
+        })
 }
 
 fn initialize_tracing() -> Result<()> {

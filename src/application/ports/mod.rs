@@ -7,6 +7,7 @@ pub mod directories;
 pub mod docker;
 pub mod editor;
 pub mod emulator;
+pub mod environment;
 pub mod files;
 pub mod filesystem;
 pub mod persistence;
@@ -38,6 +39,7 @@ pub use docker::{
     DockerPortSnapshot,
 };
 pub use editor::{EditorBackend, EditorOpenOutcome, EditorOperationStatus, EditorWindowSnapshot};
+pub use environment::EnvironmentLifecycleBackend;
 pub use files::FileCatalog;
 pub use filesystem::FileSystem;
 pub use persistence::{ConfigStore, StateStore};
