@@ -23,10 +23,10 @@ The product is not a shell-script wrapper. Earlier scripts are product inspirati
 The first implementation targets this compatibility profile:
 
 ```text
-Operating system: Linux
+Operating system family: Linux
 Distribution: Pop!_OS
 Desktop environment: COSMIC
-Terminal multiplexer: tmux
+Required terminal capability: tmux
 ```
 
 The first release must include all capabilities defined by the current product specification:
@@ -53,8 +53,8 @@ The first release must include all capabilities defined by the current product s
 The architecture must already allow future support for combinations such as:
 
 ```text
-Linux + Ubuntu + GNOME + tmux
-Linux + Ubuntu + KDE + another terminal backend
+Ubuntu + GNOME
+Ubuntu + KDE + another terminal backend
 Windows + WSL + another desktop or terminal integration
 ```
 
@@ -382,7 +382,7 @@ Detected environment:
   Desktop environment: GNOME
 
 Currently supported:
-  Linux + Pop!_OS + COSMIC + tmux
+  Pop!_OS + COSMIC
 ```
 
 `new`, `edit`, stop, and delete are also blocked on unsupported systems. Configuration management must not become a way to bypass compatibility policy in the MVP.
@@ -414,7 +414,7 @@ The compatibility registry must allow a future backend to add a new support prof
 
 Base platform compatibility and optional tool availability are separate checks.
 
-For a compatible Pop!_OS + COSMIC + tmux system, an environment may still require tools such as Docker, `docker compose`, Zed, VS Code, Cursor, `adb`, or the Android Emulator. Missing required tools must produce a targeted error before the dependent action starts. Do not fail the whole environment because an optional integration is not configured when the environment does not use it.
+For a compatible Pop!_OS + COSMIC system, an environment may still require tools such as Docker, `docker compose`, Zed, VS Code, Cursor, `adb`, or the Android Emulator. Missing required tools must produce a targeted error before the dependent action starts. Do not fail the whole environment because an optional integration is not configured when the environment does not use it.
 
 ## 8. Environment composition model
 

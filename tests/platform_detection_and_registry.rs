@@ -107,7 +107,7 @@ impl PlatformDetector for StaticDetector {
 }
 
 #[test]
-fn supported_pop_os_cosmic_tmux_is_detected_and_accepted() {
+fn supported_pop_os_cosmic_is_detected_and_accepted() {
     let probe = FakeProbe::supported();
     let Some(platform) = detect(&probe) else {
         return;
@@ -129,6 +129,19 @@ fn supported_pop_os_cosmic_tmux_is_detected_and_accepted() {
         return;
     };
     assert!(registry.preflight(&platform).is_ok());
+}
+
+#[test]
+fn default_profile_name_contains_only_distribution_and_desktop() {
+    let profile = SupportProfile::pop_os_cosmic();
+
+    assert_eq!(profile.id, "pop-os-cosmic");
+    assert_eq!(profile.description, "Pop!_OS + COSMIC");
+    assert!(
+        profile
+            .required_capabilities()
+            .contains(&CapabilityId::TerminalSessions)
+    );
 }
 
 #[test]
@@ -165,11 +178,13 @@ fn ubuntu_gnome_is_rejected_with_structured_platform_diagnostics() {
         error
             .context
             .get("supported_profiles")
-            .is_some_and(|value| value.contains("Linux + Pop!_OS + COSMIC + tmux"))
+            .is_some_and(|value| value.contains("Pop!_OS + COSMIC"))
     );
     let rendered = error.render();
     assert!(rendered.contains("Operating system: Linux"));
     assert!(rendered.contains("Currently supported:"));
+    assert!(rendered.contains("  Pop!_OS + COSMIC\n"));
+    assert!(!rendered.contains("Linux + Pop!_OS + COSMIC + tmux"));
 }
 
 #[test]
@@ -272,8 +287,8 @@ fn registry_supports_lookup_and_additive_registration() {
     assert_eq!(handler.backend_id, "desktop");
 
     let profile = SupportProfile::new(
-        "linux-ubuntu-gnome-tmux",
-        "Linux + Ubuntu + GNOME + tmux",
+        "ubuntu-gnome",
+        "Ubuntu + GNOME",
         OperatingSystemPredicate::Linux,
         DistributionPredicate::Ubuntu,
         DesktopPredicate::Gnome,

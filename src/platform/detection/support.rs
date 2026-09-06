@@ -222,10 +222,10 @@ impl SupportProfile {
         }
     }
 
-    pub fn initial() -> Self {
+    pub fn pop_os_cosmic() -> Self {
         Self::new(
-            "linux-pop-os-cosmic-tmux",
-            "Linux + Pop!_OS + COSMIC + tmux",
+            "pop-os-cosmic",
+            "Pop!_OS + COSMIC",
             OperatingSystemPredicate::Linux,
             DistributionPredicate::PopOs,
             DesktopPredicate::Cosmic,
@@ -237,6 +237,10 @@ impl SupportProfile {
                 CapabilityId::BackgroundProcesses,
             ],
         )
+    }
+
+    pub fn initial() -> Self {
+        Self::pop_os_cosmic()
     }
 
     pub fn matches_identity(&self, platform: &DetectedPlatform) -> bool {

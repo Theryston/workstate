@@ -43,7 +43,7 @@ control plane for your local workflow.
 
 ### 1. Install
 
-On a supported Linux system:
+On a supported Pop!_OS + COSMIC system:
 
 ```bash
 curl -fsSL https://tryws.theryston.dev/unix.sh | bash
@@ -358,9 +358,9 @@ Workstate detects your platform and available integrations before doing any
 work. The current supported profile is intentionally focused so the first
 experience can be deeply integrated instead of merely generic.
 
-| Platform                                | Status             |
+| Compatibility profile                   | Status             |
 | --------------------------------------- | ------------------ |
-| **Pop!\_OS + COSMIC + tmux**            | ✅ Supported today |
+| **Pop!\_OS + COSMIC**                   | ✅ Supported today |
 | **GNOME + any Linux distribution**      | 🚧 Coming soon     |
 | **KDE Plasma + any Linux distribution** | 🚧 Coming soon     |
 

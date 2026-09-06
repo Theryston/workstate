@@ -240,7 +240,7 @@ impl IntegrationRegistry {
             .next()
             .map(|profile| self.missing_capabilities(&profile.required_base_capabilities))
             .unwrap_or_default();
-        Err(self.unsupported_platform_error(platform, &missing))
+        Err(self.unsupported_compatibility_error(platform, &missing))
     }
 
     pub fn require_capabilities<I>(&self, required: I) -> Result<()>
@@ -301,7 +301,7 @@ impl IntegrationRegistry {
     }
 
     fn register_default_profile(&mut self) {
-        let profile = SupportProfile::initial();
+        let profile = SupportProfile::pop_os_cosmic();
         self.profiles.insert(profile.id.clone(), profile);
     }
 
@@ -480,7 +480,7 @@ impl IntegrationRegistry {
         self.backends.get(&capability).map(String::as_str)
     }
 
-    fn unsupported_platform_error(
+    fn unsupported_compatibility_error(
         &self,
         platform: &DetectedPlatform,
         missing: &[CapabilityId],
