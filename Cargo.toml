@@ -1,6 +1,6 @@
 [package]
 name = "workstate"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "⚡ One command. Your entire work environment, orchestrated!"
 

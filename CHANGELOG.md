@@ -4,6 +4,20 @@ All notable changes to Workstate are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/Theryston/workstate/compare/v0.1.0...v0.1.1) - 2026-09-05
+
+### Added
+
+- add Unix bootstrap installer script
+
+### Other
+
+- Update README.md
+- add MIT license reference
+- Add MIT License to the project
+- replace implementation task plan with public README
+- Update crate description in Cargo.toml
+
 ## [0.1.0](https://github.com/Theryston/workstate/releases/tag/v0.1.0) - 2026-09-05
 
 ### Added
