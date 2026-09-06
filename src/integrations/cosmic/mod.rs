@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod errors;
 pub mod models;
+pub(crate) mod wayland;
 
 use std::{sync::Arc, time::Duration};
 
@@ -26,6 +27,7 @@ use crate::{
 
 pub use backend::CosmicBackend;
 pub use errors::CosmicError;
+pub use wayland::CosmicWaylandCoordinator;
 
 #[derive(Clone)]
 pub struct WorkspaceHandler {

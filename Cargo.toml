@@ -9,7 +9,12 @@ clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.29"
 dialoguer = "0.11"
 ratatui = "0.29"
+cosmic-client-toolkit = "0.2"
+cosmic-protocols = { version = "0.2", default-features = false, features = ["client"] }
+smithay-client-toolkit = "0.20"
 tokio = { version = "1.47", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.9"
 thiserror = "2"
