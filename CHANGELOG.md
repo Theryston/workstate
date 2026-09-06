@@ -4,6 +4,12 @@ All notable changes to Workstate are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/Theryston/workstate/compare/v0.1.2...v0.1.3) - 2026-09-06
+
+### Added
+
+- rename initial support profile to Pop!_OS + COSMIC
+
 ## [0.1.2](https://github.com/Theryston/workstate/compare/v0.1.1...v0.1.2) - 2026-09-06
 
 ### Added
