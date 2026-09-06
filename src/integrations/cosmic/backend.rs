@@ -3,85 +3,87 @@ use std::sync::Arc;
 use crate::{
     application::ports::{
         BackgroundProcess, BoxFuture, DesktopBackend, DesktopOperationOutcome, DesktopSnapshot,
-        ProcessOutput, ProcessRequest, ProcessRunner,
+        ProcessRequest, ProcessRunner,
     },
+    application::timeouts::DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
     error::{ErrorCategory, Result, WorkstateError},
-    platform::desktop::cosmic::{CosmicCommand, CosmicOperation},
 };
 
-use super::{errors::CosmicError, models};
+use super::{errors::CosmicError, wayland::CosmicWaylandCoordinator};
 
 #[derive(Clone)]
 pub struct CosmicBackend {
-    runner: Arc<dyn ProcessRunner>,
-    command: CosmicCommand,
+    process_runner: Arc<dyn ProcessRunner>,
+    wayland: Arc<CosmicWaylandCoordinator>,
 }
 
 impl CosmicBackend {
     pub fn new(runner: Arc<dyn ProcessRunner>) -> Self {
+        Self::with_wayland(runner, Arc::new(CosmicWaylandCoordinator::new()))
+    }
+
+    pub fn with_wayland(
+        process_runner: Arc<dyn ProcessRunner>,
+        wayland: Arc<CosmicWaylandCoordinator>,
+    ) -> Self {
         Self {
-            runner,
-            command: CosmicCommand::default(),
+            process_runner,
+            wayland,
         }
-    }
-
-    pub fn with_command(mut self, command: CosmicCommand) -> Self {
-        self.command = command;
-        self
-    }
-
-    pub fn command(&self) -> &CosmicCommand {
-        &self.command
-    }
-
-    async fn run_operation(&self, operation: CosmicOperation) -> Result<ProcessOutput> {
-        let operation_name = operation_name(&operation);
-        let request = ProcessRequest {
-            program: self.command.program().to_owned(),
-            arguments: self.command.arguments(&operation),
-            working_directory: None,
-            environment: Vec::new(),
-        };
-        let output = self.runner.run(request).await.map_err(|source| {
-            CosmicError::CommandFailed {
-                operation: operation_name.clone(),
-                detail: source.render(),
-            }
-            .into_workstate()
-        })?;
-        if !output.succeeded() {
-            return Err(CosmicError::CommandFailed {
-                operation: operation_name,
-                detail: process_failure_detail(&output),
-            }
-            .into_workstate());
-        }
-        Ok(output)
-    }
-
-    async fn run_mutation(&self, operation: CosmicOperation) -> Result<DesktopOperationOutcome> {
-        let identity = operation_identity(&operation);
-        let operation_name = operation_name(&operation);
-        let output = self.run_operation(operation).await?;
-        if !output.stdout.is_empty() {
-            serde_json::from_slice::<serde_json::Value>(&output.stdout).map_err(|source| {
-                CosmicError::MalformedOutput {
-                    operation: operation_name,
-                    detail: source.to_string(),
-                }
-                .into_workstate()
-            })?;
-        }
-        Ok(DesktopOperationOutcome::changed(identity))
     }
 
     pub async fn observe(&self) -> Result<DesktopSnapshot> {
-        let workspace_future = self.run_operation(CosmicOperation::GetWorkspaces);
-        let window_future = self.run_operation(CosmicOperation::GetWindows);
-        let (workspace_output, window_output) = tokio::join!(workspace_future, window_future);
-        let workspace_output = workspace_output?;
-        let window_output = window_output?;
-        models::decode_snapshot(&workspace_output.stdout, &window_output.stdout)
+        self.wayland
+            .observe(DEFAULT_EXTERNAL_OPERATION_TIMEOUT)
+            .await
+            .map_err(CosmicError::into_workstate)
+    }
+
+    async fn set_tiling_native(
+        &self,
+        workspace_identity: &str,
+        enabled: bool,
+    ) -> Result<DesktopOperationOutcome> {
+        self.wayland
+            .set_tiling(
+                workspace_identity,
+                enabled,
+                DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
+            )
+            .await
+            .map(map_native_outcome)
+            .map_err(CosmicError::into_workstate)
+    }
+
+    async fn move_window_native(
+        &self,
+        window_identity: &str,
+        workspace_identity: &str,
+    ) -> Result<DesktopOperationOutcome> {
+        self.wayland
+            .move_window(
+                window_identity,
+                workspace_identity,
+                DEFAULT_EXTERNAL_OPERATION_TIMEOUT,
+            )
+            .await
+            .map(map_native_outcome)
+            .map_err(CosmicError::into_workstate)
+    }
+
+    async fn close_window_native(&self, window_identity: &str) -> Result<DesktopOperationOutcome> {
+        self.wayland
+            .close_window(window_identity, DEFAULT_EXTERNAL_OPERATION_TIMEOUT)
+            .await
+            .map(map_native_outcome)
+            .map_err(CosmicError::into_workstate)
+    }
+
+    async fn focus_window_native(&self, window_identity: &str) -> Result<DesktopOperationOutcome> {
+        self.wayland
+            .focus_window(window_identity, DEFAULT_EXTERNAL_OPERATION_TIMEOUT)
+            .await
+            .map(map_native_outcome)
             .map_err(CosmicError::into_workstate)
     }
 }
@@ -97,7 +99,7 @@ impl DesktopBackend for CosmicBackend {
     ) -> BoxFuture<'a, Result<DesktopOperationOutcome>> {
         Box::pin(async move {
             let process = self
-                .runner
+                .process_runner
                 .start_background(request)
                 .await
                 .map_err(|source| {
@@ -117,7 +119,7 @@ impl DesktopBackend for CosmicBackend {
     ) -> BoxFuture<'a, Result<DesktopOperationOutcome>> {
         Box::pin(async move {
             let process = BackgroundProcess::new(process_identity.to_owned())?;
-            self.runner
+            self.process_runner
                 .stop_background(process)
                 .await
                 .map_err(|source| {
@@ -140,7 +142,7 @@ impl DesktopBackend for CosmicBackend {
         Box::pin(async {
             Err(CosmicError::Unavailable {
                 operation: "create-workspace".to_owned(),
-                detail: "the current COSMIC command contract does not expose workspace creation"
+                detail: "the native COSMIC workspace protocol does not expose workspace creation"
                     .to_owned(),
             }
             .into_workstate())
@@ -154,7 +156,7 @@ impl DesktopBackend for CosmicBackend {
         Box::pin(async {
             Err(CosmicError::Unavailable {
                 operation: "delete-workspace".to_owned(),
-                detail: "the current COSMIC command contract does not expose workspace deletion"
+                detail: "the native COSMIC workspace protocol does not expose workspace deletion"
                     .to_owned(),
             }
             .into_workstate())
@@ -167,11 +169,8 @@ impl DesktopBackend for CosmicBackend {
         workspace_identity: &'a str,
     ) -> BoxFuture<'a, Result<DesktopOperationOutcome>> {
         Box::pin(async move {
-            self.run_mutation(CosmicOperation::MoveWindow {
-                window: window_identity.to_owned(),
-                workspace: workspace_identity.to_owned(),
-            })
-            .await
+            self.move_window_native(window_identity, workspace_identity)
+                .await
         })
     }
 
@@ -179,24 +178,14 @@ impl DesktopBackend for CosmicBackend {
         &'a self,
         window_identity: &'a str,
     ) -> BoxFuture<'a, Result<DesktopOperationOutcome>> {
-        Box::pin(async move {
-            self.run_mutation(CosmicOperation::CloseWindow {
-                window: window_identity.to_owned(),
-            })
-            .await
-        })
+        Box::pin(async move { self.close_window_native(window_identity).await })
     }
 
     fn focus_window<'a>(
         &'a self,
         window_identity: &'a str,
     ) -> BoxFuture<'a, Result<DesktopOperationOutcome>> {
-        Box::pin(async move {
-            self.run_mutation(CosmicOperation::FocusWindow {
-                window: window_identity.to_owned(),
-            })
-            .await
-        })
+        Box::pin(async move { self.focus_window_native(window_identity).await })
     }
 
     fn set_tiling<'a>(
@@ -204,46 +193,28 @@ impl DesktopBackend for CosmicBackend {
         workspace_identity: &'a str,
         enabled: bool,
     ) -> BoxFuture<'a, Result<DesktopOperationOutcome>> {
-        Box::pin(async move {
-            self.run_mutation(CosmicOperation::SetTiling {
-                workspace: workspace_identity.to_owned(),
-                enabled,
-            })
-            .await
-        })
+        Box::pin(async move { self.set_tiling_native(workspace_identity, enabled).await })
     }
 }
 
-fn operation_name(operation: &CosmicOperation) -> String {
-    match operation {
-        CosmicOperation::GetWorkspaces => "get-workspaces".to_owned(),
-        CosmicOperation::GetWindows => "get-toplevels".to_owned(),
-        CosmicOperation::SetTiling { .. } => "set-tiling".to_owned(),
-        CosmicOperation::MoveWindow { .. } => "move-window".to_owned(),
-        CosmicOperation::CloseWindow { .. } => "close-window".to_owned(),
-        CosmicOperation::FocusWindow { .. } => "focus-window".to_owned(),
+fn map_native_outcome(outcome: DesktopOperationOutcome) -> DesktopOperationOutcome {
+    match outcome.status {
+        crate::application::ports::DesktopOperationStatus::Changed => {
+            let mut mapped = DesktopOperationOutcome::changed(outcome.identity);
+            mapped.detail = outcome.detail;
+            mapped
+        }
+        crate::application::ports::DesktopOperationStatus::Unchanged => {
+            let mut mapped = DesktopOperationOutcome::unchanged(outcome.identity);
+            mapped.detail = outcome.detail;
+            mapped
+        }
+        crate::application::ports::DesktopOperationStatus::Created
+        | crate::application::ports::DesktopOperationStatus::AlreadyPresent
+        | crate::application::ports::DesktopOperationStatus::Reused
+        | crate::application::ports::DesktopOperationStatus::Unavailable
+        | crate::application::ports::DesktopOperationStatus::Ambiguous => outcome,
     }
-}
-
-fn operation_identity(operation: &CosmicOperation) -> Option<String> {
-    match operation {
-        CosmicOperation::SetTiling { workspace, .. } => Some(workspace.clone()),
-        CosmicOperation::MoveWindow { window, .. }
-        | CosmicOperation::CloseWindow { window }
-        | CosmicOperation::FocusWindow { window } => Some(window.clone()),
-        CosmicOperation::GetWorkspaces | CosmicOperation::GetWindows => None,
-    }
-}
-
-fn process_failure_detail(output: &ProcessOutput) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    if !stderr.is_empty() {
-        return stderr;
-    }
-    output
-        .exit_code()
-        .map(|code| format!("process exited with status {code}"))
-        .unwrap_or_else(|| "process terminated without an exit status".to_owned())
 }
 
 pub fn unsupported_desktop_error() -> WorkstateError {
@@ -251,4 +222,126 @@ pub fn unsupported_desktop_error() -> WorkstateError {
         ErrorCategory::Platform,
         "COSMIC desktop integration is unavailable on this platform",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use crate::application::ports::{DesktopOperationStatus, ProcessOutput};
+
+    #[derive(Clone, Default)]
+    struct RecordingProcessRunner {
+        started: Arc<Mutex<Vec<ProcessRequest>>>,
+        stopped: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl RecordingProcessRunner {
+        fn started(&self) -> Result<Vec<ProcessRequest>> {
+            self.started
+                .lock()
+                .map(|requests| requests.clone())
+                .map_err(|_| WorkstateError::new(ErrorCategory::Runtime, "test lock failed"))
+        }
+
+        fn stopped(&self) -> Result<Vec<String>> {
+            self.stopped
+                .lock()
+                .map(|identities| identities.clone())
+                .map_err(|_| WorkstateError::new(ErrorCategory::Runtime, "test lock failed"))
+        }
+    }
+
+    impl ProcessRunner for RecordingProcessRunner {
+        fn run<'a>(&'a self, _: ProcessRequest) -> BoxFuture<'a, Result<ProcessOutput>> {
+            Box::pin(async {
+                Err(WorkstateError::new(
+                    ErrorCategory::Process,
+                    "the desktop backend must not use ProcessRunner::run for COSMIC state",
+                ))
+            })
+        }
+
+        fn start_background<'a>(
+            &'a self,
+            request: ProcessRequest,
+        ) -> BoxFuture<'a, Result<BackgroundProcess>> {
+            let result = self
+                .started
+                .lock()
+                .map_err(|_| WorkstateError::new(ErrorCategory::Runtime, "test lock failed"))
+                .and_then(|mut requests| {
+                    requests.push(request);
+                    BackgroundProcess::new("application-process")
+                });
+            Box::pin(async move { result })
+        }
+
+        fn stop_background<'a>(&'a self, process: BackgroundProcess) -> BoxFuture<'a, Result<()>> {
+            let result = self
+                .stopped
+                .lock()
+                .map_err(|_| WorkstateError::new(ErrorCategory::Runtime, "test lock failed"))
+                .map(|mut identities| identities.push(process.identity));
+            Box::pin(async move { result })
+        }
+    }
+
+    #[tokio::test]
+    async fn application_launch_and_cleanup_stay_on_the_injected_process_port() -> Result<()> {
+        let runner = Arc::new(RecordingProcessRunner::default());
+        let backend = CosmicBackend::new(Arc::clone(&runner) as Arc<dyn ProcessRunner>);
+        let request = ProcessRequest {
+            program: "zed".to_owned(),
+            arguments: vec!["--new".to_owned()],
+            working_directory: None,
+            environment: Vec::new(),
+        };
+
+        let launch = backend.open_application(request.clone()).await?;
+        assert_eq!(launch.status, DesktopOperationStatus::Created);
+        assert_eq!(launch.identity.as_deref(), Some("application-process"));
+        assert_eq!(runner.started()?, vec![request]);
+
+        let cleanup = backend.stop_application("application-process").await?;
+        assert_eq!(cleanup.status, DesktopOperationStatus::Changed);
+        assert_eq!(runner.stopped()?, vec!["application-process".to_owned()]);
+        Ok(())
+    }
+
+    #[test]
+    fn native_outcome_mapping_preserves_only_changed_and_unchanged_semantics() {
+        let changed = map_native_outcome(
+            DesktopOperationOutcome::changed(Some("window-1".to_owned())).with_detail("confirmed"),
+        );
+        let unchanged = map_native_outcome(DesktopOperationOutcome::unchanged(Some(
+            "workspace-1".to_owned(),
+        )));
+
+        assert_eq!(changed.status, DesktopOperationStatus::Changed);
+        assert_eq!(changed.identity.as_deref(), Some("window-1"));
+        assert_eq!(changed.detail.as_deref(), Some("confirmed"));
+        assert_eq!(unchanged.status, DesktopOperationStatus::Unchanged);
+        assert_eq!(unchanged.identity.as_deref(), Some("workspace-1"));
+    }
+
+    #[test]
+    fn native_outcome_mapping_preserves_non_mutation_statuses() {
+        for status in [
+            DesktopOperationStatus::Created,
+            DesktopOperationStatus::AlreadyPresent,
+            DesktopOperationStatus::Reused,
+            DesktopOperationStatus::Unavailable,
+            DesktopOperationStatus::Ambiguous,
+        ] {
+            let outcome = DesktopOperationOutcome {
+                status,
+                identity: Some("resource-1".to_owned()),
+                detail: Some("preserved".to_owned()),
+            };
+
+            assert_eq!(map_native_outcome(outcome.clone()), outcome);
+        }
+    }
 }

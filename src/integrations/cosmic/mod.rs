@@ -1,6 +1,5 @@
 pub mod backend;
 pub mod errors;
-pub mod models;
 pub(crate) mod wayland;
 
 use std::{sync::Arc, time::Duration};

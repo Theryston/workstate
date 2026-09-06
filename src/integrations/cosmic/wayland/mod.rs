@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use crate::application::ports::DesktopSnapshot;
+use crate::application::ports::{DesktopOperationOutcome, DesktopSnapshot};
 
 use super::errors::CosmicError;
 
@@ -23,6 +23,57 @@ impl CosmicWaylandCoordinator {
     pub async fn observe(&self, timeout: Duration) -> Result<DesktopSnapshot, CosmicError> {
         self.run_blocking("observe", move || connection::observe(timeout))
             .await
+    }
+
+    pub async fn set_tiling(
+        &self,
+        workspace_identity: &str,
+        enabled: bool,
+        timeout: Duration,
+    ) -> Result<DesktopOperationOutcome, CosmicError> {
+        let workspace_identity = workspace_identity.to_owned();
+        self.run_blocking("set-tiling", move || {
+            connection::set_tiling(workspace_identity, enabled, timeout)
+        })
+        .await
+    }
+
+    pub async fn move_window(
+        &self,
+        window_identity: &str,
+        workspace_identity: &str,
+        timeout: Duration,
+    ) -> Result<DesktopOperationOutcome, CosmicError> {
+        let window_identity = window_identity.to_owned();
+        let workspace_identity = workspace_identity.to_owned();
+        self.run_blocking("move-window", move || {
+            connection::move_window(window_identity, workspace_identity, timeout)
+        })
+        .await
+    }
+
+    pub async fn close_window(
+        &self,
+        window_identity: &str,
+        timeout: Duration,
+    ) -> Result<DesktopOperationOutcome, CosmicError> {
+        let window_identity = window_identity.to_owned();
+        self.run_blocking("close-window", move || {
+            connection::close_window(window_identity, timeout)
+        })
+        .await
+    }
+
+    pub async fn focus_window(
+        &self,
+        window_identity: &str,
+        timeout: Duration,
+    ) -> Result<DesktopOperationOutcome, CosmicError> {
+        let window_identity = window_identity.to_owned();
+        self.run_blocking("focus-window", move || {
+            connection::focus_window(window_identity, timeout)
+        })
+        .await
     }
 
     pub async fn run_blocking<T, F>(

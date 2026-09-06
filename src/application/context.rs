@@ -40,8 +40,8 @@ use crate::{
         process::TokioProcessRunner,
     },
     integrations::{
-        CosmicBackend, DockerProcessBackend, IntegrationRegistry, ProjectEditorKind,
-        StartOtherEnvironmentActionHandler, TmuxProcessBackend, ZedBackend,
+        CosmicBackend, CosmicWaylandCoordinator, DockerProcessBackend, IntegrationRegistry,
+        ProjectEditorKind, StartOtherEnvironmentActionHandler, TmuxProcessBackend, ZedBackend,
         android::{AndroidBackend, AndroidTool, find_tool},
     },
     platform::{
@@ -226,7 +226,11 @@ impl AppContext {
             && detected_platform.desktop_environment.is_cosmic();
         let (desktop_backend, editor_backend, emulator_backend, action_handlers) =
             if supported_desktop {
-                let cosmic = Arc::new(CosmicBackend::new(Arc::clone(&process_runner)));
+                let wayland = Arc::new(CosmicWaylandCoordinator::new());
+                let cosmic = Arc::new(CosmicBackend::with_wayland(
+                    Arc::clone(&process_runner),
+                    wayland,
+                ));
                 let desktop: Arc<dyn DesktopBackend> = cosmic;
                 let zed = Arc::new(ZedBackend::new(
                     Arc::clone(&process_runner),

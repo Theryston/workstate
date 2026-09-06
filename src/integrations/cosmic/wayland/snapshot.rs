@@ -46,7 +46,13 @@ pub(crate) struct NativeSnapshot {
 }
 
 pub(crate) fn from_wayland_state(state: &CosmicReadState) -> Result<DesktopSnapshot, CosmicError> {
-    let operation = "observe";
+    from_wayland_state_for_operation(state, "observe")
+}
+
+pub(crate) fn from_wayland_state_for_operation(
+    state: &CosmicReadState,
+    operation: &str,
+) -> Result<DesktopSnapshot, CosmicError> {
     for capability in [
         ReadCapability::WorkspaceEnumeration,
         ReadCapability::ForeignToplevelEnumeration,
@@ -105,14 +111,24 @@ pub(crate) fn from_wayland_state(state: &CosmicReadState) -> Result<DesktopSnaps
         });
     }
 
-    from_native_snapshot(NativeSnapshot {
-        workspaces: native_workspaces,
-        windows: native_windows,
-    })
+    from_native_snapshot_for_operation(
+        NativeSnapshot {
+            workspaces: native_workspaces,
+            windows: native_windows,
+        },
+        operation,
+    )
 }
 
+#[cfg(test)]
 pub(crate) fn from_native_snapshot(native: NativeSnapshot) -> Result<DesktopSnapshot, CosmicError> {
-    let operation = "observe";
+    from_native_snapshot_for_operation(native, "observe")
+}
+
+fn from_native_snapshot_for_operation(
+    native: NativeSnapshot,
+    operation: &str,
+) -> Result<DesktopSnapshot, CosmicError> {
     let mut workspace_ids = HashSet::new();
     let mut workspaces = Vec::with_capacity(native.workspaces.len());
 
@@ -199,7 +215,7 @@ pub(crate) fn from_native_snapshot(native: NativeSnapshot) -> Result<DesktopSnap
     })
 }
 
-fn protocol_workspace_identity(
+pub(crate) fn protocol_workspace_identity(
     workspace: &Workspace,
     operation: &str,
 ) -> Result<String, CosmicError> {

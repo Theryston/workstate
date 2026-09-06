@@ -21,8 +21,8 @@ const MINIMUM_FOREIGN_TOPLEVEL_LIST_VERSION: u32 = 1;
 const MINIMUM_COSMIC_TOPLEVEL_INFO_VERSION: u32 = 3;
 const MINIMUM_OUTPUT_VERSION: u32 = 1;
 const MINIMUM_SEAT_VERSION: u32 = 1;
-#[allow(dead_code)]
 const MINIMUM_TOPLEVEL_MANAGER_VERSION: u32 = 1;
+const MINIMUM_MOVE_TO_EXTERNAL_WORKSPACE_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ReadCapabilities {
@@ -40,16 +40,15 @@ pub(crate) struct ReadCapabilities {
     pub(crate) target_workspace_output_association: bool,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct ManagementCapabilities {
     pub(crate) global_available: bool,
     pub(crate) close: bool,
     pub(crate) activate: bool,
+    pub(crate) move_to_workspace: bool,
     pub(crate) move_to_external_workspace: bool,
 }
 
-#[allow(dead_code)]
 impl ManagementCapabilities {
     pub(crate) fn with_global() -> Self {
         Self {
@@ -75,6 +74,9 @@ impl ManagementCapabilities {
                 zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1::Activate => {
                     capabilities.activate = true;
                 }
+                zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1::MoveToWorkspace => {
+                    capabilities.move_to_workspace = true;
+                }
                 zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1::MoveToExtWorkspace => {
                     capabilities.move_to_external_workspace = true;
                 }
@@ -85,7 +87,6 @@ impl ManagementCapabilities {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ManagementCapability {
     ToplevelManagement,
@@ -94,7 +95,6 @@ pub(crate) enum ManagementCapability {
     MoveToExternalWorkspace,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReadCapability {
     WorkspaceEnumeration,
@@ -174,7 +174,6 @@ pub(crate) fn validate_read_capabilities(
     })
 }
 
-#[allow(dead_code)]
 pub(crate) fn validate_mutation_capabilities(
     globals: &[Global],
     operation: &str,
@@ -186,7 +185,31 @@ pub(crate) fn validate_mutation_capabilities(
     )
 }
 
-#[allow(dead_code)]
+pub(crate) fn require_management_protocol_version(
+    advertised: u32,
+    capability: ManagementCapability,
+    operation: &str,
+) -> Result<(), CosmicError> {
+    let required = match capability {
+        ManagementCapability::MoveToExternalWorkspace => MINIMUM_MOVE_TO_EXTERNAL_WORKSPACE_VERSION,
+        ManagementCapability::ToplevelManagement
+        | ManagementCapability::WindowClose
+        | ManagementCapability::WindowActivation => MINIMUM_TOPLEVEL_MANAGER_VERSION,
+    };
+    if advertised >= required {
+        return Ok(());
+    }
+
+    Err(CosmicError::ProtocolVersionUnsupported {
+        operation: operation.to_owned(),
+        protocol: zcosmic_toplevel_manager_v1::ZcosmicToplevelManagerV1::interface()
+            .name
+            .to_owned(),
+        required,
+        advertised: Some(advertised),
+    })
+}
+
 pub(crate) fn require_management_capability(
     capabilities: ManagementCapabilities,
     capability: ManagementCapability,
@@ -206,6 +229,33 @@ pub(crate) fn require_management_capability(
         operation: operation.to_owned(),
         capability: capability.label().to_owned(),
         detail: "the compositor did not advertise this capability".to_owned(),
+    })
+}
+
+pub(crate) fn require_external_workspace_move_capability(
+    capabilities: ManagementCapabilities,
+    protocol_version: u32,
+    operation: &str,
+) -> Result<(), CosmicError> {
+    require_management_protocol_version(
+        protocol_version,
+        ManagementCapability::MoveToExternalWorkspace,
+        operation,
+    )?;
+
+    if capabilities.move_to_external_workspace
+        || capabilities.move_to_workspace
+            && protocol_version >= MINIMUM_MOVE_TO_EXTERNAL_WORKSPACE_VERSION
+    {
+        return Ok(());
+    }
+
+    Err(CosmicError::CapabilityUnavailable {
+        operation: operation.to_owned(),
+        capability: ManagementCapability::MoveToExternalWorkspace
+            .label()
+            .to_owned(),
+        detail: "the compositor did not advertise an external-workspace move capability".to_owned(),
     })
 }
 
@@ -234,7 +284,6 @@ pub(crate) fn require_read_capability(
     })
 }
 
-#[allow(dead_code)]
 pub(crate) fn require_workspace_tiling_capability(
     supported: bool,
     operation: &str,
@@ -250,7 +299,6 @@ pub(crate) fn require_workspace_tiling_capability(
     })
 }
 
-#[allow(dead_code)]
 pub(crate) fn workspace_supports_tiling(
     capabilities: zcosmic_workspace_handle_v2::WorkspaceCapabilities,
 ) -> bool {
@@ -413,6 +461,9 @@ mod tests {
                 zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1::Activate,
             ),
             WEnum::Value(
+                zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1::MoveToWorkspace,
+            ),
+            WEnum::Value(
                 zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1::MoveToExtWorkspace,
             ),
             WEnum::Unknown(99),
@@ -423,6 +474,7 @@ mod tests {
         assert!(capabilities.global_available);
         assert!(capabilities.close);
         assert!(capabilities.activate);
+        assert!(capabilities.move_to_workspace);
         assert!(capabilities.move_to_external_workspace);
     }
 
@@ -442,6 +494,21 @@ mod tests {
                 ..
             }) if operation == "close-window" && capability == "window close"
         ));
+
+        let result = require_management_capability(
+            ManagementCapabilities::with_global(),
+            ManagementCapability::WindowActivation,
+            "focus-window",
+        );
+
+        assert!(matches!(
+            result,
+            Err(CosmicError::CapabilityUnavailable {
+                operation,
+                capability,
+                ..
+            }) if operation == "focus-window" && capability == "window activation"
+        ));
     }
 
     #[test]
@@ -450,5 +517,55 @@ mod tests {
             zcosmic_workspace_handle_v2::WorkspaceCapabilities::SetTilingState
         ));
         assert!(require_workspace_tiling_capability(false, "set-tiling").is_err());
+    }
+
+    #[test]
+    fn requires_the_protocol_version_that_introduced_external_workspace_moves() {
+        let result = require_management_protocol_version(
+            3,
+            ManagementCapability::MoveToExternalWorkspace,
+            "move-window",
+        );
+
+        assert!(matches!(
+            result,
+            Err(CosmicError::ProtocolVersionUnsupported {
+                protocol,
+                required: 4,
+                advertised: Some(3),
+                ..
+            }) if protocol == "zcosmic_toplevel_manager_v1"
+        ));
+    }
+
+    #[test]
+    fn accepts_the_legacy_move_capability_for_a_v4_external_move() {
+        let result = require_external_workspace_move_capability(
+            ManagementCapabilities {
+                move_to_workspace: true,
+                ..ManagementCapabilities::with_global()
+            },
+            4,
+            "move-window",
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn rejects_the_legacy_move_capability_before_the_external_move_protocol_version() {
+        let result = require_external_workspace_move_capability(
+            ManagementCapabilities {
+                move_to_workspace: true,
+                ..ManagementCapabilities::with_global()
+            },
+            3,
+            "move-window",
+        );
+
+        assert!(matches!(
+            result,
+            Err(CosmicError::ProtocolVersionUnsupported { required: 4, .. })
+        ));
     }
 }

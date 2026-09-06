@@ -50,6 +50,13 @@ pub enum CosmicError {
         matches: usize,
     },
     #[error(
+        "COSMIC operation '{operation}' could not find an output for target workspace '{workspace}'"
+    )]
+    TargetWorkspaceOutputMissing {
+        operation: String,
+        workspace: String,
+    },
+    #[error(
         "COSMIC operation '{operation}' cannot continue because capability '{capability}' is unavailable: {detail}"
     )]
     CapabilityUnavailable {
@@ -99,6 +106,7 @@ impl CosmicError {
             | Self::WorkspaceAmbiguous { .. }
             | Self::WindowNotFound { .. }
             | Self::WindowAmbiguous { .. }
+            | Self::TargetWorkspaceOutputMissing { .. }
             | Self::MutationNotConfirmed { .. }
             | Self::InvalidProtocolData { .. }
             | Self::OperationTimedOut { .. }

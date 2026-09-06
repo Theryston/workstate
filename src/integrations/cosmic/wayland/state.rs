@@ -36,11 +36,12 @@ pub(crate) struct CosmicReadState {
     protocol_error: Option<CosmicError>,
 }
 
-#[allow(dead_code)]
 pub(crate) struct CosmicMutationState {
     pub(crate) read: CosmicReadState,
     pub(crate) toplevel_manager_state: ToplevelManagerState,
+    pub(crate) toplevel_manager_version: u32,
     pub(crate) management_capabilities: ManagementCapabilities,
+    pub(crate) management_capabilities_received: bool,
 }
 
 impl CosmicReadState {
@@ -81,7 +82,6 @@ impl CosmicReadState {
     }
 }
 
-#[allow(dead_code)]
 impl CosmicMutationState {
     pub(crate) fn new(
         globals: &GlobalList,
@@ -91,7 +91,8 @@ impl CosmicMutationState {
         let registry_state = RegistryState::new(globals);
         let capabilities = validate_registry_capabilities(&registry_state, operation)?;
         let advertised_globals = registry_state.globals().cloned().collect::<Vec<_>>();
-        validate_mutation_capabilities(&advertised_globals, operation)?;
+        let toplevel_manager_version =
+            validate_mutation_capabilities(&advertised_globals, operation)?;
         let output_state = OutputState::new(globals, qh);
         let seat_state = SeatState::new(globals, qh);
         let workspace_state = WorkspaceState::new(&registry_state, qh);
@@ -122,7 +123,9 @@ impl CosmicMutationState {
                 protocol_error: None,
             },
             toplevel_manager_state,
+            toplevel_manager_version,
             management_capabilities: ManagementCapabilities::with_global(),
+            management_capabilities_received: false,
         })
     }
 
@@ -419,6 +422,7 @@ impl ToplevelManagerHandler for CosmicMutationState {
         >,
     ) {
         self.management_capabilities = ManagementCapabilities::from_protocol(capabilities);
+        self.management_capabilities_received = true;
     }
 }
 
