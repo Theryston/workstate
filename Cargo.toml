@@ -15,6 +15,7 @@ smithay-client-toolkit = "0.20"
 tokio = { version = "1.47", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+polling = "3"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.9"
 thiserror = "2"

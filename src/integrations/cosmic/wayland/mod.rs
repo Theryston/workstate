@@ -1,4 +1,6 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
+
+use crate::application::ports::DesktopSnapshot;
 
 use super::errors::CosmicError;
 
@@ -16,6 +18,11 @@ pub struct CosmicWaylandCoordinator {
 impl CosmicWaylandCoordinator {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub async fn observe(&self, timeout: Duration) -> Result<DesktopSnapshot, CosmicError> {
+        self.run_blocking("observe", move || connection::observe(timeout))
+            .await
     }
 
     pub async fn run_blocking<T, F>(
