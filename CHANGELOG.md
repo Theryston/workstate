@@ -4,6 +4,20 @@ All notable changes to Workstate are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/Theryston/workstate/compare/v0.1.3...v0.1.4) - 2026-09-07
+
+### Added
+
+- *(release)* install Linux build dependencies for release workflow
+- *(cosmic)* add native Wayland observation for workspaces and windows
+- *(cosmic)* scaffold native Wayland coordinator
+
+### Other
+
+- Merge branch 'native-cosmic' of github.com:Theryston/workstate
+- replace cosmicmsg CLI with native Wayland protocol integration
+- *(cosmic)* move COSMIC mutations from cosmicmsg to native Wayland
+
 ## [0.1.3](https://github.com/Theryston/workstate/compare/v0.1.2...v0.1.3) - 2026-09-06
 
 ### Added
