@@ -32,7 +32,6 @@ use workstate::{
     error::{ErrorCategory, Result, WorkstateError},
     infrastructure::filesystem::local::LocalFileSystem,
     integrations::{
-        CosmicBackend,
         cosmic::WorkspaceHandler,
         zed::{ProjectEditorKind, ZedBackend, ZedCommand, ZedProjectHandler},
     },
@@ -109,18 +108,14 @@ impl FileSystem for HomeOverrideFileSystem {
 
 #[derive(Clone)]
 struct FixtureProcessRunner {
-    workspaces: Vec<u8>,
-    windows: Vec<u8>,
     calls: Arc<Mutex<Vec<ProcessRequest>>>,
     launch: Option<(FakeDesktop, PathBuf)>,
     stopped: Arc<Mutex<Vec<String>>>,
 }
 
 impl FixtureProcessRunner {
-    fn for_cosmic(workspaces: &[u8], windows: &[u8]) -> Self {
+    fn for_project() -> Self {
         Self {
-            workspaces: workspaces.to_vec(),
-            windows: windows.to_vec(),
             calls: Arc::new(Mutex::new(Vec::new())),
             launch: None,
             stopped: Arc::new(Mutex::new(Vec::new())),
@@ -129,8 +124,6 @@ impl FixtureProcessRunner {
 
     fn for_zed_launch(desktop: FakeDesktop, project_path: PathBuf) -> Self {
         Self {
-            workspaces: Vec::new(),
-            windows: Vec::new(),
             calls: Arc::new(Mutex::new(Vec::new())),
             launch: Some((desktop, project_path)),
             stopped: Arc::new(Mutex::new(Vec::new())),
@@ -160,8 +153,6 @@ impl FixtureProcessRunner {
 impl ProcessRunner for FixtureProcessRunner {
     fn run<'a>(&'a self, request: ProcessRequest) -> BoxFuture<'a, Result<ProcessOutput>> {
         let calls = Arc::clone(&self.calls);
-        let workspaces = self.workspaces.clone();
-        let windows = self.windows.clone();
         Box::pin(async move {
             calls
                 .lock()
@@ -169,18 +160,9 @@ impl ProcessRunner for FixtureProcessRunner {
                 .map_err(|_| {
                     WorkstateError::new(ErrorCategory::Runtime, "fake process call lock failed")
                 })?;
-            let stdout = if request
-                .arguments
-                .iter()
-                .any(|argument| argument == "get-workspaces")
-            {
-                workspaces
-            } else {
-                windows
-            };
             Ok(ProcessOutput {
                 status: Some(0),
-                stdout,
+                stdout: Vec::new(),
                 stderr: Vec::new(),
             })
         })
@@ -489,61 +471,6 @@ async fn missing_workspace_is_refreshed_once_before_failing_or_succeeding() -> T
     Ok(())
 }
 
-#[test]
-fn cosmic_output_is_parsed_at_one_typed_boundary() -> TestResult {
-    let runner = FixtureProcessRunner::for_cosmic(
-        include_bytes!("fixtures/cosmic/workspaces.json"),
-        include_bytes!("fixtures/cosmic/windows.json"),
-    );
-    let backend = CosmicBackend::new(Arc::new(runner.clone()));
-    let snapshot = tokio::runtime::Runtime::new()?.block_on(backend.observe())?;
-    assert_eq!(snapshot.workspaces.len(), 3);
-    assert_eq!(snapshot.windows.len(), 2);
-    assert_eq!(snapshot.windows[0].workspace_identity.as_deref(), Some("2"));
-    let calls = runner.calls()?;
-    assert_eq!(calls.len(), 2);
-    assert!(
-        calls
-            .iter()
-            .any(|call| call.arguments == ["--json", "get-workspaces"])
-    );
-    assert!(
-        calls
-            .iter()
-            .any(|call| call.arguments == ["--json", "get-toplevels"])
-    );
-    Ok(())
-}
-
-#[test]
-fn unknown_cosmic_tiling_does_not_reject_the_workspace_snapshot() -> TestResult {
-    let snapshot = workstate::integrations::cosmic::models::decode_snapshot(
-        include_bytes!("fixtures/cosmic/workspaces_unknown_tiling.json"),
-        br#"[]"#,
-    )?;
-    assert_eq!(snapshot.workspaces.len(), 1);
-    assert_eq!(snapshot.workspaces[0].tiling_enabled, None);
-    Ok(())
-}
-
-#[test]
-fn empty_cosmic_window_application_is_treated_as_missing() -> TestResult {
-    let snapshot = workstate::integrations::cosmic::models::decode_snapshot(
-        include_bytes!("fixtures/cosmic/workspaces.json"),
-        br#"[
-            {
-                "identifier": "window-without-application",
-                "app_id": "",
-                "title": "Desktop surface",
-                "state": [],
-                "workspaces": ["1"]
-            }
-        ]"#,
-    )?;
-    assert_eq!(snapshot.windows[0].application, None);
-    Ok(())
-}
-
 #[tokio::test]
 async fn zed_expands_home_relative_project_paths_before_validation() -> TestResult {
     let home = tempdir()?;
@@ -574,16 +501,6 @@ async fn zed_expands_home_relative_project_paths_before_validation() -> TestResu
         vec!["-n".to_owned(), project_path.display().to_string()]
     );
     assert_eq!(request.working_directory, Some(project_path));
-    Ok(())
-}
-
-#[test]
-fn malformed_cosmic_output_is_rejected() -> TestResult {
-    let result = workstate::integrations::cosmic::models::decode_snapshot(
-        include_bytes!("fixtures/cosmic/malformed.json"),
-        include_bytes!("fixtures/cosmic/windows.json"),
-    );
-    assert!(result.is_err());
     Ok(())
 }
 
@@ -663,7 +580,7 @@ async fn project_editors_reuse_title_matched_windows_without_project_metadata() 
                     focused: false,
                 }],
             });
-            let runner = FixtureProcessRunner::for_cosmic(&[], &[]);
+            let runner = FixtureProcessRunner::for_project();
             let backend = ZedBackend::for_editor(
                 Arc::new(runner.clone()),
                 Arc::new(desktop),
@@ -739,7 +656,7 @@ async fn project_editor_matching_normalizes_observed_home_aliases() -> TestResul
             focused: false,
         }],
     });
-    let runner = FixtureProcessRunner::for_cosmic(&[], &[]);
+    let runner = FixtureProcessRunner::for_project();
     let backend = ZedBackend::for_editor(
         Arc::new(runner.clone()),
         Arc::new(desktop),
@@ -1003,7 +920,7 @@ async fn reused_zed_windows_are_not_moved_back_after_manual_relocation() -> Test
             focused: false,
         }],
     });
-    let runner = FixtureProcessRunner::for_cosmic(&[], &[]);
+    let runner = FixtureProcessRunner::for_project();
     let editor = Arc::new(ZedBackend::new(
         Arc::new(runner),
         Arc::new(desktop.clone()),
@@ -1052,7 +969,7 @@ async fn zed_observation_requires_placement_for_an_existing_project_window() -> 
         }],
     });
     let editor = Arc::new(ZedBackend::new(
-        Arc::new(FixtureProcessRunner::for_cosmic(&[], &[])),
+        Arc::new(FixtureProcessRunner::for_project()),
         Arc::new(desktop.clone()),
         Arc::new(LocalFileSystem),
     ));
@@ -1105,7 +1022,7 @@ async fn reconciliation_resolves_next_empty_before_observing_existing_project_pl
     });
     let editor = Arc::new(
         ZedBackend::new(
-            Arc::new(FixtureProcessRunner::for_cosmic(&[], &[])),
+            Arc::new(FixtureProcessRunner::for_project()),
             Arc::new(desktop.clone()),
             Arc::new(LocalFileSystem),
         )
@@ -1172,7 +1089,7 @@ async fn zed_observation_reuses_persisted_identity_without_project_metadata() ->
             focused: false,
         }],
     });
-    let runner = FixtureProcessRunner::for_cosmic(&[], &[]);
+    let runner = FixtureProcessRunner::for_project();
     let editor = Arc::new(ZedBackend::new(
         Arc::new(runner.clone()),
         Arc::new(desktop.clone()),
@@ -1225,7 +1142,7 @@ async fn stop_closes_owned_zed_windows_and_preserves_shared_windows() -> TestRes
         ],
     });
     let editor = Arc::new(ZedBackend::new(
-        Arc::new(FixtureProcessRunner::for_cosmic(&[], &[])),
+        Arc::new(FixtureProcessRunner::for_project()),
         Arc::new(desktop.clone()),
         Arc::new(LocalFileSystem),
     ));
@@ -1262,7 +1179,7 @@ async fn zed_cleanup_uses_persisted_window_identity_without_project_metadata() -
         }],
     });
     let editor = Arc::new(ZedBackend::new(
-        Arc::new(FixtureProcessRunner::for_cosmic(&[], &[])),
+        Arc::new(FixtureProcessRunner::for_project()),
         Arc::new(desktop.clone()),
         Arc::new(LocalFileSystem),
     ));
@@ -1329,7 +1246,7 @@ async fn zed_stop_fails_when_cosmic_does_not_remove_the_window() -> TestResult {
     };
     let editor = Arc::new(
         ZedBackend::new(
-            Arc::new(FixtureProcessRunner::for_cosmic(&[], &[])),
+            Arc::new(FixtureProcessRunner::for_project()),
             Arc::new(desktop.clone()),
             Arc::new(LocalFileSystem),
         )
@@ -1360,7 +1277,7 @@ async fn zed_timeout_is_typed_and_cleans_the_handoff() -> TestResult {
         workspaces: vec![workspace("main", "Main", 0, true, true)],
         windows: Vec::new(),
     });
-    let mut runner = FixtureProcessRunner::for_cosmic(&[], &[]);
+    let mut runner = FixtureProcessRunner::for_project();
     runner.launch = None;
     let runner = runner;
     let backend = ZedBackend::new(

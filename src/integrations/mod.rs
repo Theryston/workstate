@@ -11,7 +11,7 @@ pub mod zed;
 pub use android::{AdbClient, AndroidBackend, AndroidEmulatorActionHandler};
 pub use application::ApplicationActionHandler;
 pub use command::CommandActionHandler;
-pub use cosmic::CosmicBackend;
+pub use cosmic::{CosmicBackend, CosmicWaylandCoordinator};
 pub use docker::{DockerActionHandler, DockerProcessBackend};
 pub use environment::StartOtherEnvironmentActionHandler;
 pub use registry::{ActionHandlerDescriptor, CapabilityAvailability, IntegrationRegistry};

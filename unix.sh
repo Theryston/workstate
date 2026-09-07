@@ -3,7 +3,6 @@ set -Eeuo pipefail
 
 readonly REPOSITORY="Theryston/workstate"
 readonly BINARY_NAME="workstate"
-readonly COSMICMSG_URL="https://files.theryston.dev/cosmic/cosmicmsg"
 readonly RELEASE_API_URL="https://api.github.com/repos/${REPOSITORY}/releases/latest"
 readonly INSTALL_DIR="${XDG_BIN_HOME:-${HOME}/.local/bin}"
 
@@ -99,7 +98,7 @@ detect_architecture() {
 
 require_sudo() {
     if ! command -v sudo >/dev/null 2>&1; then
-        abort "sudo is required to install system packages and cosmicmsg into /usr/local/bin."
+        abort "sudo is required to install system packages."
     fi
 
     if ! sudo -v; then
@@ -187,38 +186,6 @@ install_tmux() {
     fi
 
     success "tmux installed successfully"
-}
-
-install_cosmicmsg() {
-    step "Checking cosmicmsg"
-
-    if command -v cosmicmsg >/dev/null 2>&1; then
-        success "cosmicmsg is already installed"
-        return
-    fi
-
-    ensure_download_tool
-    local cosmicmsg_path="${TMP_DIR}/cosmicmsg"
-
-    printf '%sDownloading cosmicmsg...%s\n' "$CYAN" "$RESET"
-    if ! download_file "$COSMICMSG_URL" "$cosmicmsg_path"; then
-        abort "Could not download cosmicmsg from ${COSMICMSG_URL}."
-    fi
-
-    if [ ! -s "$cosmicmsg_path" ]; then
-        abort "The downloaded cosmicmsg file is empty."
-    fi
-
-    require_sudo
-    if ! sudo install -m 0755 "$cosmicmsg_path" /usr/local/bin/cosmicmsg; then
-        abort "Could not install cosmicmsg into /usr/local/bin."
-    fi
-
-    if [ ! -x /usr/local/bin/cosmicmsg ]; then
-        abort "cosmicmsg was installed but is not executable at /usr/local/bin/cosmicmsg."
-    fi
-
-    success "cosmicmsg installed at /usr/local/bin/cosmicmsg"
 }
 
 install_workstate() {
@@ -344,7 +311,6 @@ main() {
 
     TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/workstate-install.XXXXXX")"
     install_tmux
-    install_cosmicmsg
     install_workstate
     persist_install_path
 
