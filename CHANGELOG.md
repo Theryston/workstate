@@ -4,6 +4,17 @@ All notable changes to Workstate are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/Theryston/workstate/compare/v0.1.4...v0.1.5) - 2026-09-07
+
+### Added
+
+- *(release)* install Linux build dependencies in release workflow
+
+### Fixed
+
+- reflow AGENTS.md to 72-column lines
+- *(release)* fetch arm64 packages from Ubuntu ports
+
 ## [0.1.4](https://github.com/Theryston/workstate/compare/v0.1.3...v0.1.4) - 2026-09-07
 
 ### Added
