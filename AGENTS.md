@@ -906,7 +906,7 @@ It must support:
 - closing only owned windows;
 - detecting windows by stable identifiers whenever possible.
 
-The backend may use `cosmicmsg` and its JSON output, but all command execution must pass through the injected process runner and all JSON parsing must use typed deserialization where practical. Do not replicate `jq` pipelines in application logic.
+The COSMIC backend communicates with the compositor through its native Wayland protocol adapter. Protocol types and transport details remain isolated inside the COSMIC integration, while the application layer consumes the generic desktop capability ports. Desktop observation and mutation must not be implemented as external process operations.
 
 The backend must preserve the previous tiling value in runtime state. `stop` and rollback restore the previous value instead of assuming that tiling should always be disabled.
 
@@ -1273,7 +1273,7 @@ All external processes must run through `ProcessRunner` and the Tokio process AP
 - process identity when needed for ownership;
 - redaction of sensitive values.
 
-Do not call `std::process::Command`, `std::fs`, `systemctl`, `tmux`, `docker`, `cosmicmsg`, `zed`, `adb`, or the emulator binary directly from use cases or UI code.
+Do not call `std::process::Command`, `std::fs`, `systemctl`, `tmux`, `docker`, `zed`, `adb`, or the emulator binary directly from use cases or UI code. Native COSMIC protocol communication must remain behind the desktop integration ports and must not be reached from use cases or UI code.
 
 ### 17.2 Shell commands
 
@@ -1683,7 +1683,7 @@ Release automation is defined by `.github/workflows/release.yml` and `release-pl
 - the installer must run only for Pop!_OS with an active COSMIC desktop session on Linux;
 - unsupported systems must fail before installing packages, downloading binaries, or changing user files;
 - missing `tmux` is installed through the Pop!_OS `apt` package manager after obtaining sudo authorization;
-- missing `cosmicmsg` is downloaded from `https://files.theryston.dev/cosmic/cosmicmsg`, installed as `/usr/local/bin/cosmicmsg`, and marked executable;
+- native COSMIC communication is provided by Workstate through its isolated Wayland integration; the installer does not download or install a desktop helper binary;
 - the Workstate archive is selected from the detected architecture using the `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu` target;
 - Workstate is installed to `${XDG_BIN_HOME:-$HOME/.local/bin}` without requiring root privileges;
 - the installer downloads and verifies `checksums-sha256.txt` before extracting the Workstate archive;

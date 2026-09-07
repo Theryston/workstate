@@ -78,10 +78,6 @@ pub enum CosmicError {
     BlockingTaskFailed { operation: String, detail: String },
     #[error("COSMIC operation '{operation}' failed: {detail}")]
     CommandFailed { operation: String, detail: String },
-    #[error("COSMIC operation '{operation}' returned malformed data: {detail}")]
-    MalformedOutput { operation: String, detail: String },
-    #[error("COSMIC operation '{operation}' returned incomplete data: {detail}")]
-    IncompleteOutput { operation: String, detail: String },
     #[error("COSMIC operation '{operation}' is unavailable: {detail}")]
     Unavailable { operation: String, detail: String },
 }
@@ -112,8 +108,6 @@ impl CosmicError {
             | Self::OperationTimedOut { .. }
             | Self::BlockingTaskFailed { .. }
             | Self::CommandFailed { .. }
-            | Self::MalformedOutput { .. }
-            | Self::IncompleteOutput { .. }
             | Self::Unavailable { .. } => ErrorCategory::Integration,
         }
     }
