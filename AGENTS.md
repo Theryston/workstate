@@ -2,21 +2,44 @@
 
 ## 1. Purpose of this document
 
-This file is the normative engineering guide for the `workstate` repository. Every implementation, refactor, test, user-facing message, prompt, and documentation change must follow the rules in this file.
+This file is the normative engineering guide for the `workstate` repository.
+Every implementation, refactor, test, user-facing message, prompt, and
+documentation change must follow the rules in this file
 
-The project is intentionally designed so that a future coding agent can understand the product, preserve its behavior, extend it safely, and avoid coupling new features to a specific operating system, desktop environment, terminal multiplexer, editor, container runtime, or emulator.
+The project is intentionally designed so that a future coding agent can
+understand the product, preserve its behavior, extend it safely, and avoid
+coupling new features to a specific operating system, desktop environment,
+terminal multiplexer, editor, container runtime, or emulator.
 
-When a future decision is not explicitly covered here, choose the smallest reversible design that preserves the boundaries described below. Do not silently introduce a new public command, configuration field, persistence format, backend dependency, platform assumption, or lifecycle behavior. Record meaningful new decisions in this file when the behavior becomes intentional and stable.
+When a future decision is not explicitly covered here, choose the smallest
+reversible design that preserves the boundaries described below. Do not silently
+introduce a new public command, configuration field, persistence format, backend
+dependency, platform assumption, or lifecycle behavior. Record meaningful new
+decisions in this file when the behavior becomes intentional and stable.
 
 ## 2. Project identity
 
 `workstate` is a fast local work-environment orchestrator for programmers.
 
-The user defines a named environment once. The environment describes the complete working state required for a particular context, such as a personal blog, a mobile application, an API, or a full-stack product. An environment may contain multiple projects, services, applications, desktop workspaces, terminal sessions, commands, checks, and dependencies between them.
+The user defines a named environment once. The environment describes the
+complete working state required for a particular context, such as a personal
+blog, a mobile application, an API, or a full-stack product. An environment may
+contain multiple projects, services, applications, desktop workspaces, terminal
+sessions, commands, checks, and dependencies between them.
 
-When the user runs an environment, `workstate` reconciles the desired state with the actual state of the computer. It detects what is already correct, starts or opens only what is missing, waits for required readiness conditions, applies the requested desktop configuration, and verifies the result. The main `workstate` process remains visible only for the setup and reconciliation phase. Once setup is complete, it exits and leaves persistent background processes running independently.
+When the user runs an environment, `workstate` reconciles the desired state with
+the actual state of the computer. It detects what is already correct, starts or
+opens only what is missing, waits for required readiness conditions, applies the
+requested desktop configuration, and verifies the result. The main `workstate`
+process remains visible only for the setup and reconciliation phase. Once setup
+is complete, it exits and leaves persistent background processes running
+independently.
 
-The product is not a shell-script wrapper. Earlier scripts are product inspiration only and are not a supported input format, runtime dependency, or compatibility target. The Rust implementation must use explicit domain models, typed state, injected ports, capability-based backends, transactional cleanup, and a modern terminal user interface.
+The product is not a shell-script wrapper. Earlier scripts are product
+inspiration only and are not a supported input format, runtime dependency, or
+compatibility target. The Rust implementation must use explicit domain models,
+typed state, injected ports, capability-based backends, transactional cleanup,
+and a modern terminal user interface.
 
 ## 3. Initial support boundary
 
@@ -29,7 +52,8 @@ Desktop environment: COSMIC
 Required terminal capability: tmux
 ```
 
-The first release must include all capabilities defined by the current product specification:
+The first release must include all capabilities defined by the current product
+specification:
 
 - COSMIC desktop workspaces;
 - COSMIC window discovery and movement;
@@ -58,7 +82,10 @@ Ubuntu + KDE + another terminal backend
 Windows + WSL + another desktop or terminal integration
 ```
 
-Platform support is selected at runtime by automatic detection and capability matching. Users do not select a Cargo feature to choose their operating system or desktop environment in the MVP. Do not make platform behavior depend on a compile-time feature matrix unless a future, explicit decision requires it.
+Platform support is selected at runtime by automatic detection and capability
+matching. Users do not select a Cargo feature to choose their operating system
+or desktop environment in the MVP. Do not make platform behavior depend on a
+compile-time feature matrix unless a future, explicit decision requires it.
 
 ## 4. Non-negotiable rules
 
@@ -87,7 +114,11 @@ Do not add Portuguese or mixed-language user-facing text.
 
 Comments in source code are explicitly prohibited by default.
 
-Add a comment only when the code cannot reasonably be understood through clear naming, decomposition, types, or structure. A comment must explain an unavoidable non-obvious constraint, external protocol quirk, safety invariant, or platform limitation. Do not use comments to narrate obvious code, restate a function name, document routine control flow, or compensate for poor naming.
+Add a comment only when the code cannot reasonably be understood through clear
+naming, decomposition, types, or structure. A comment must explain an
+unavoidable non-obvious constraint, external protocol quirk, safety invariant,
+or platform limitation. Do not use comments to narrate obvious code, restate a
+function name, document routine control flow, or compensate for poor naming.
 
 Prefer:
 
@@ -98,7 +129,9 @@ Prefer:
 - dedicated error variants;
 - tests that demonstrate behavior.
 
-Do not add decorative comments, section banners, commented-out code, or TODO comments. Move durable design information into this file or a dedicated English documentation page.
+Do not add decorative comments, section banners, commented-out code, or TODO
+comments. Move durable design information into this file or a dedicated English
+documentation page.
 
 ### 4.3 Error safety
 
@@ -112,22 +145,28 @@ The following are prohibited in production code and ordinary test code:
 - silently ignored `Result` values;
 - broad catch-and-continue behavior that hides a failed required action.
 
-Use typed errors, `Result`, explicit fallbacks, and the `?` operator. Assertions are allowed in tests when they are the test itself; they must not replace runtime error handling.
+Use typed errors, `Result`, explicit fallbacks, and the `?` operator. Assertions
+are allowed in tests when they are the test itself; they must not replace
+runtime error handling.
 
 ### 4.4 Architecture
 
 The code is closed for changes and open for features:
 
-- the domain model and reconciliation engine must not be rewritten for every new integration;
-- new platforms and integrations must implement existing ports or add isolated capability contracts;
+- the domain model and reconciliation engine must not be rewritten for every new
+  integration;
+- new platforms and integrations must implement existing ports or add isolated
+  capability contracts;
 - integrations must not call one another directly;
 - orchestration belongs in the application layer;
 - operating-system and process effects belong behind injected abstractions;
-- new behavior must be added through handlers, registries, capabilities, or backend implementations instead of growing a central conditional tree.
+- new behavior must be added through handlers, registries, capabilities, or
+  backend implementations instead of growing a central conditional tree.
 
 ### 4.5 User safety
 
-The application must never stop, close, delete, or mutate a resource merely because it is visible. Every resource must be classified as one of:
+The application must never stop, close, delete, or mutate a resource merely
+because it is visible. Every resource must be classified as one of:
 
 - created by the current execution;
 - created by this environment in a previous execution;
@@ -135,45 +174,63 @@ The application must never stop, close, delete, or mutate a resource merely beca
 - shared with another active environment;
 - unknown or externally owned.
 
-Rollback and `stop` may clean up only resources that the environment owns and that are not shared. Existing and shared resources must be preserved.
+Rollback and `stop` may clean up only resources that the environment owns and
+that are not shared. Existing and shared resources must be preserved.
 
 ## 5. Glossary
 
 ### Environment
 
-A named, persisted desired state. It is the top-level unit selected, reconciled, stopped, and deleted by the user. An environment may contain many projects and many resource actions.
+A named, persisted desired state. It is the top-level unit selected, reconciled,
+stopped, and deleted by the user. An environment may contain many projects and
+many resource actions.
 
 ### Desktop workspace
 
-A visual workspace provided by the desktop environment, initially COSMIC. It is not the same thing as a `workstate` environment. A desktop workspace is a destination for application windows and a place where tiling may be enabled.
+A visual workspace provided by the desktop environment, initially COSMIC. It is
+not the same thing as a `workstate` environment. A desktop workspace is a
+destination for application windows and a place where tiling may be enabled.
 
 ### Project
 
-A user-selected directory, usually a repository or application folder. A project is not required to be the root of the full environment. Multiple projects may coexist in one environment.
+A user-selected directory, usually a repository or application folder. A project
+is not required to be the root of the full environment. Multiple projects may
+coexist in one environment.
 
 ### Action
 
-A declarative node in the environment graph. An action describes what must be ensured, where it belongs, how it runs, what it depends on, and how it is checked.
+A declarative node in the environment graph. An action describes what must be
+ensured, where it belongs, how it runs, what it depends on, and how it is
+checked.
 
 ### Resource
 
-The real object represented or created by an action, such as a Docker container, a Compose stack, a Zed, VS Code, or Cursor window, an emulator, a desktop workspace, a tmux session, or a tmux window.
+The real object represented or created by an action, such as a Docker container,
+a Compose stack, a Zed, VS Code, or Cursor window, an emulator, a desktop
+workspace, a tmux session, or a tmux window.
 
 ### Backend
 
-An implementation of a capability contract. Examples include the COSMIC desktop backend, the tmux terminal backend, the Docker backend, the project-editor backend for Zed, VS Code, and Cursor, and the Android Emulator backend.
+An implementation of a capability contract. Examples include the COSMIC desktop
+backend, the tmux terminal backend, the Docker backend, the project-editor
+backend for Zed, VS Code, and Cursor, and the Android Emulator backend.
 
 ### Integration
 
-A concrete adapter for an external tool or platform component. Integrations belong under `src/integrations/` and communicate with external systems through injected ports.
+A concrete adapter for an external tool or platform component. Integrations
+belong under `src/integrations/` and communicate with external systems through
+injected ports.
 
 ### Run once
 
-An action that runs during setup, waits for completion, reports stdout/stderr, and does not remain in tmux after it finishes.
+An action that runs during setup, waits for completion, reports stdout/stderr,
+and does not remain in tmux after it finishes.
 
 ### Background action
 
-An action whose process must continue after the main `workstate` process exits. Background commands use one tmux session per environment and one tmux window per background command.
+An action whose process must continue after the main `workstate` process exits.
+Background commands use one tmux session per environment and one tmux window per
+background command.
 
 ### Desired state
 
@@ -181,15 +238,18 @@ The state described by `environment.toml`.
 
 ### Observed state
 
-The state discovered from the operating system and integrations at execution time.
+The state discovered from the operating system and integrations at execution
+time.
 
 ### Reconciliation
 
-The process of comparing desired state with observed state and applying only the missing or incorrect changes.
+The process of comparing desired state with observed state and applying only the
+missing or incorrect changes.
 
 ### Ownership
 
-The record explaining whether an environment created, reused, or shares a resource, and therefore whether it may stop or close that resource.
+The record explaining whether an environment created, reused, or shares a
+resource, and therefore whether it may stop or close that resource.
 
 ### Compensation
 
@@ -197,9 +257,16 @@ The reverse operation used during rollback after a setup failure.
 
 ## 6. Public CLI contract
 
-The MVP does not expose a separate public `start` subcommand. Running an environment by name is the start operation.
+The MVP does not expose a separate public `start` subcommand. Running an
+environment by name is the start operation.
 
-The parser also accepts `workstate run [environment]` and `workstate start [environment]` as hidden compatibility aliases. Without an environment, either alias must normalize to the same selector flow as `workstate`; with an environment, either alias must normalize to the same lifecycle flow as `workstate <environment>`. They must not create separate execution paths, must not appear in root help output, and must not be documented as public subcommands.
+The parser also accepts `workstate run [environment]` and
+`workstate start [environment]` as hidden compatibility aliases. Without an
+environment, either alias must normalize to the same selector flow as
+`workstate`; with an environment, either alias must normalize to the same
+lifecycle flow as `workstate <environment>`. They must not create separate
+execution paths, must not appear in root help output, and must not be documented
+as public subcommands.
 
 ### 6.1 Direct environment execution
 
@@ -220,7 +287,8 @@ This command must:
 9. restore the terminal;
 10. print a concise English summary and exit.
 
-If the environment does not exist, exit with code `1` and show an actionable message such as:
+If the environment does not exist, exit with code `1` and show an actionable
+message such as:
 
 ```text
 Environment 'personal-blog' was not found.
@@ -229,7 +297,8 @@ Create it with:
   workstate new personal-blog
 ```
 
-If the environment is already fully correct, do not restart resources. Show a success state such as:
+If the environment is already fully correct, do not restart resources. Show a
+success state such as:
 
 ```text
 Environment 'personal-blog' is already in the desired state.
@@ -241,7 +310,10 @@ Environment 'personal-blog' is already in the desired state.
 workstate
 ```
 
-With no arguments, show an interactive selector listing saved environments and their current status. The selector must not assume that there is exactly one environment. If no saved environment exists, show an actionable English message pointing to `workstate new <environment>`.
+With no arguments, show an interactive selector listing saved environments and
+their current status. The selector must not assume that there is exactly one
+environment. If no saved environment exists, show an actionable English message
+pointing to `workstate new <environment>`.
 
 The selector is a TUI flow, not a raw numeric shell prompt.
 
@@ -251,18 +323,28 @@ The selector is a TUI flow, not a raw numeric shell prompt.
 workstate new [environment]
 ```
 
-`new` creates a new environment. If the environment already exists, it must fail without opening the editor or changing the configuration and show an actionable English error:
+`new` creates a new environment. If the environment already exists, it must fail
+without opening the editor or changing the configuration and show an actionable
+English error:
 
 ```text
 Environment 'personal-blog' already exists. To edit it, use:
   workstate edit personal-blog
 ```
 
-The `new` command opens the shared dynamic environment editor for a configuration that does not yet exist. A canceled edit must not partially overwrite any previous configuration. Save only after validation and explicit confirmation in the editor.
+The `new` command opens the shared dynamic environment editor for a
+configuration that does not yet exist. A canceled edit must not partially
+overwrite any previous configuration. Save only after validation and explicit
+confirmation in the editor.
 
-When the environment argument is omitted, `new` opens the reusable text field for the environment name. The name is validated and checked for an existing environment before the dynamic editor opens. Canceling the field is a successful no-op.
+When the environment argument is omitted, `new` opens the reusable text field
+for the environment name. The name is validated and checked for an existing
+environment before the dynamic editor opens. Canceling the field is a successful
+no-op.
 
-The `new` command must not require the current working directory to be the project directory. Every project path and command working directory is configured explicitly by the user and persisted in the environment file.
+The `new` command must not require the current working directory to be the
+project directory. Every project path and command working directory is
+configured explicitly by the user and persisted in the environment file.
 
 ### 6.4 Edit
 
@@ -270,11 +352,19 @@ The `new` command must not require the current working directory to be the proje
 workstate edit [environment]
 ```
 
-`edit` edits an existing environment through exactly the same dynamic TUI, fields, validation, save confirmation, and terminal lifecycle used by `new`. If the environment does not exist, it must fail before opening the editor and show an actionable English error pointing to `workstate new <environment>`.
+`edit` edits an existing environment through exactly the same dynamic TUI,
+fields, validation, save confirmation, and terminal lifecycle used by `new`. If
+the environment does not exist, it must fail before opening the editor and show
+an actionable English error pointing to `workstate new <environment>`.
 
-When the environment argument is omitted, `edit` opens the reusable environment selector. `Up` and `Down` move through saved environments and `Enter` selects one. The selected environment is then validated before the shared editor opens. `Esc` cancels without changing anything.
+When the environment argument is omitted, `edit` opens the reusable environment
+selector. `Up` and `Down` move through saved environments and `Enter` selects
+one. The selected environment is then validated before the shared editor opens.
+`Esc` cancels without changing anything.
 
-The `edit` command must not require the current working directory to be the project directory. Every project path and command working directory is loaded from and saved to the environment file.
+The `edit` command must not require the current working directory to be the
+project directory. Every project path and command working directory is loaded
+from and saved to the environment file.
 
 ### 6.5 Stop
 
@@ -282,25 +372,34 @@ The `edit` command must not require the current working directory to be the proj
 workstate stop [environment]
 ```
 
-When the environment argument is omitted, `stop` opens the same reusable environment selector used by `edit` and `delete`. The lifecycle operation starts only after the user selects an existing environment with `Up`, `Down`, and `Enter`.
+When the environment argument is omitted, `stop` opens the same reusable
+environment selector used by `edit` and `delete`. The lifecycle operation starts
+only after the user selects an existing environment with `Up`, `Down`, and
+`Enter`.
 
 `stop` must:
 
 - load persisted runtime ownership state;
-- inspect the current resource state instead of trusting stale identifiers blindly;
+- inspect the current resource state instead of trusting stale identifiers
+  blindly;
 - stop only resources owned by the environment;
 - preserve pre-existing and shared resources;
 - stop the environment's tmux session when it owns that session;
 - stop owned background processes through the terminal backend;
 - stop an Android Emulator only when this environment started it;
-- close Zed, VS Code, and Cursor windows only when this environment opened them and no other active environment owns or uses them;
-- stop only containers and Compose stacks initiated by this environment and not shared by other active environments;
-- stop Docker Desktop only when it was started by the environment and no other Docker-enabled environment still requires it;
-- restore configuration changes made by the environment, including the previous tiling state;
+- close Zed, VS Code, and Cursor windows only when this environment opened them
+  and no other active environment owns or uses them;
+- stop only containers and Compose stacks initiated by this environment and not
+  shared by other active environments;
+- stop Docker Desktop only when it was started by the environment and no other
+  Docker-enabled environment still requires it;
+- restore configuration changes made by the environment, including the previous
+  tiling state;
 - remove runtime state after a successful stop;
 - keep `environment.toml` so the environment can be run again.
 
-Stopping an already stopped or partially cleaned environment should be idempotent and should not fail merely because a resource is already gone.
+Stopping an already stopped or partially cleaned environment should be
+idempotent and should not fail merely because a resource is already gone.
 
 ### 6.6 Delete
 
@@ -308,7 +407,10 @@ Stopping an already stopped or partially cleaned environment should be idempoten
 workstate delete [environment]
 ```
 
-When the environment argument is omitted, `delete` opens the same reusable environment selector used by `edit` and `stop`. The delete confirmation is shown only after the user selects an environment. `Esc` cancels the selection without stopping or deleting anything.
+When the environment argument is omitted, `delete` opens the same reusable
+environment selector used by `edit` and `stop`. The delete confirmation is shown
+only after the user selects an environment. `Esc` cancels the selection without
+stopping or deleting anything.
 
 `delete` must:
 
@@ -318,18 +420,24 @@ When the environment argument is omitted, `delete` opens the same reusable envir
 4. stop the environment automatically if it is active;
 5. preserve resources that belong to another active environment;
 6. remove the environment directory under `~/.workstate/` only after cleanup;
-7. remove `environment.toml`, `state.toml`, logs, and generated runtime artifacts belonging to that environment;
-8. never delete project directories, source code, user files, or resources outside the environment's own state directory.
+7. remove `environment.toml`, `state.toml`, logs, and generated runtime
+   artifacts belonging to that environment;
+8. never delete project directories, source code, user files, or resources
+   outside the environment's own state directory.
 
 Cancellation is a successful no-op and must not delete anything.
 
 ### 6.7 Future commands
 
-Future commands may include status, inspect, doctor, completion, import, export, or a dedicated run command. They must be added as explicit Clap subcommands and documented before implementation. Do not change the meaning of the existing positional environment invocation.
+Future commands may include status, inspect, doctor, completion, import, export,
+or a dedicated run command. They must be added as explicit Clap subcommands and
+documented before implementation. Do not change the meaning of the existing
+positional environment invocation.
 
 ### 6.8 Global flags
 
-The command model should reserve these flags for the MVP or an immediately compatible future implementation:
+The command model should reserve these flags for the MVP or an immediately
+compatible future implementation:
 
 ```text
 --yes
@@ -341,7 +449,9 @@ The command model should reserve these flags for the MVP or an immediately compa
 --config <path>
 ```
 
-Flags must have consistent behavior across commands. `--yes` bypasses only confirmations; it must not bypass compatibility checks, validation, ownership safety, or rollback.
+Flags must have consistent behavior across commands. `--yes` bypasses only
+confirmations; it must not bypass compatibility checks, validation, ownership
+safety, or rollback.
 
 ### 6.9 Exit codes
 
@@ -353,17 +463,21 @@ Use stable exit semantics:
 2  command-line usage error emitted by Clap
 ```
 
-The setup failure path specifically exits with `1` after rollback has been attempted.
+The setup failure path specifically exits with `1` after rollback has been
+attempted.
 
 ## 7. Compatibility detection
 
 ### 7.1 Detection behavior
 
-Every `workstate` command must perform compatibility validation before changing the computer or persisting a new runtime state.
+Every `workstate` command must perform compatibility validation before changing
+the computer or persisting a new runtime state.
 
-On a compatible system, detection is silent. Do not show a compatibility banner during normal operation.
+On a compatible system, detection is silent. Do not show a compatibility banner
+during normal operation.
 
-On an unsupported system, every command must exit with an English error that includes:
+On an unsupported system, every command must exit with an English error that
+includes:
 
 - the detected operating system;
 - the detected distribution;
@@ -385,7 +499,9 @@ Currently supported:
   Pop!_OS + COSMIC
 ```
 
-`new`, `edit`, stop, and delete are also blocked on unsupported systems. Configuration management must not become a way to bypass compatibility policy in the MVP.
+`new`, `edit`, stop, and delete are also blocked on unsupported systems.
+Configuration management must not become a way to bypass compatibility policy in
+the MVP.
 
 ### 7.2 Detection architecture
 
@@ -406,21 +522,31 @@ SupportProfile
   human-readable description
 ```
 
-The detector must be replaceable and testable through `PlatformDetector`. It may inspect standard Linux metadata such as `/etc/os-release`, environment variables, and integration availability, but this logic belongs behind the platform ports.
+The detector must be replaceable and testable through `PlatformDetector`. It may
+inspect standard Linux metadata such as `/etc/os-release`, environment
+variables, and integration availability, but this logic belongs behind the
+platform ports.
 
-The compatibility registry must allow a future backend to add a new support profile without rewriting the reconciliation engine or changing existing backend implementations.
+The compatibility registry must allow a future backend to add a new support
+profile without rewriting the reconciliation engine or changing existing backend
+implementations.
 
 ### 7.3 Capability checks
 
 Base platform compatibility and optional tool availability are separate checks.
 
-For a compatible Pop!_OS + COSMIC system, an environment may still require tools such as Docker, `docker compose`, Zed, VS Code, Cursor, `adb`, or the Android Emulator. Missing required tools must produce a targeted error before the dependent action starts. Do not fail the whole environment because an optional integration is not configured when the environment does not use it.
+For a compatible Pop!_OS + COSMIC system, an environment may still require tools
+such as Docker, `docker compose`, Zed, VS Code, Cursor, `adb`, or the Android
+Emulator. Missing required tools must produce a targeted error before the
+dependent action starts. Do not fail the whole environment because an optional
+integration is not configured when the environment does not use it.
 
 ## 8. Environment composition model
 
 ### 8.1 Environment as a dependency graph
 
-An environment is a directed acyclic graph of actions. It is not a flat list of shell commands and not a hard-coded sequence tied to the current legacy script.
+An environment is a directed acyclic graph of actions. It is not a flat list of
+shell commands and not a hard-coded sequence tied to the current legacy script.
 
 Each action has:
 
@@ -446,7 +572,9 @@ The graph must be validated before execution:
 - backend capabilities are available;
 - workspace references resolve within the same environment.
 
-Independent actions may execute concurrently after their dependencies are satisfied. Dependent actions must not start until all required dependencies have completed successfully and their readiness checks pass.
+Independent actions may execute concurrently after their dependencies are
+satisfied. Dependent actions must not start until all required dependencies have
+completed successfully and their readiness checks pass.
 
 ### 8.2 Generic action vocabulary
 
@@ -467,34 +595,83 @@ Create background terminal window
 Custom integration action
 ```
 
-The UI may show well-known integrations such as Zed, VS Code, Cursor, Docker, tmux, and Android Emulator when those capabilities are available. The core model must not make tmux the only possible representation of a background process, and it must not require every future integration to modify the core scheduler.
+The UI may show well-known integrations such as Zed, VS Code, Cursor, Docker,
+tmux, and Android Emulator when those capabilities are available. The core model
+must not make tmux the only possible representation of a background process, and
+it must not require every future integration to modify the core scheduler.
 
-An environment may contain any number of actions with the same `ActionKind`. The action ID remains unique for graph and persistence purposes, while each handler derives a resource identity key from the action's typed configuration. For `Open Project with Zed`, `Open Project with VS Code`, and `Open Project with Cursor`, the key is the resolved canonical project directory within the selected editor profile. Different project keys and editor profiles must be reconciled independently even when the scheduler runs those actions concurrently. Never use the action kind alone as the identity of an external resource.
+An environment may contain any number of actions with the same `ActionKind`. The
+action ID remains unique for graph and persistence purposes, while each handler
+derives a resource identity key from the action's typed configuration. For
+`Open Project with Zed`, `Open Project with VS Code`, and
+`Open Project with Cursor`, the key is the resolved canonical project directory
+within the selected editor profile. Different project keys and editor profiles
+must be reconciled independently even when the scheduler runs those actions
+concurrently. Never use the action kind alone as the identity of an external
+resource.
 
-The resource identity key is separate from placement metadata. During reconciliation, an existing resource that matches its action-specific key is reused rather than recreated. If the action has a workspace target and the resource is in a different workspace, the action requires a placement change and must move the existing resource without launching a duplicate. A workspace target must not make an existing keyed resource look missing or cause a repeated run to recreate it solely because a dynamic target resolves differently.
+The resource identity key is separate from placement metadata. During
+reconciliation, an existing resource that matches its action-specific key is
+reused rather than recreated. If the action has a workspace target and the
+resource is in a different workspace, the action requires a placement change and
+must move the existing resource without launching a duplicate. A workspace
+target must not make an existing keyed resource look missing or cause a repeated
+run to recreate it solely because a dynamic target resolves differently.
 
 ### 8.3 Working directory
 
-Every command-like or project-like action may specify its own `working_directory` or project path.
+Every command-like or project-like action may specify its own
+`working_directory` or project path.
 
-The current process working directory must never be used as an implicit project directory for a saved environment. The user must be able to run `workstate <environment>` from any directory.
+The current process working directory must never be used as an implicit project
+directory for a saved environment. The user must be able to run
+`workstate <environment>` from any directory.
 
-Paths are saved in the user-friendly form entered by the user, including forms such as:
+Paths are saved in the user-friendly form entered by the user, including forms
+such as:
 
 ```text
 ~/Projects/blog/api
 $HOME/Projects/blog/frontend
 ```
 
-Resolve, expand, validate, and canonicalize paths at execution time. Do not permanently replace the configured representation with an absolute path during ordinary saves.
+Resolve, expand, validate, and canonicalize paths at execution time. Do not
+permanently replace the configured representation with an absolute path during
+ordinary saves.
 
-Path resolution must be centralized in an injected path service or infrastructure component. Do not duplicate tilde or environment-variable expansion in individual integrations.
+Path resolution must be centralized in an injected path service or
+infrastructure component. Do not duplicate tilde or environment-variable
+expansion in individual integrations.
 
-All editor fields that accept directories must use the reusable directory-input flow. The flow must offer directory-only autocomplete, preserve the user's `~`, `$HOME`, or absolute-path representation, refresh suggestions after each path separator, support `Up` and `Down` selection, and complete the selected directory with `Tab`. It must display the current path and available directory suggestions while the input is active. Path validation may run while typing to keep the input state accurate, but validation errors must not be rendered inside the popup. `Enter` must not commit an invalid directory value; it must show the English error in the editor footer, where the standard editor notices appear. The UI must consume the injected `DirectoryCatalog` port and must never enumerate the filesystem directly. The initial local implementation uses the shared `FileSystem` and `PathResolver`; future operating-system implementations may provide their own catalog without changing the editor.
+All editor fields that accept directories must use the reusable directory-input
+flow. The flow must offer directory-only autocomplete, preserve the user's `~`,
+`$HOME`, or absolute-path representation, refresh suggestions after each path
+separator, support `Up` and `Down` selection, and complete the selected
+directory with `Tab`. It must display the current path and available directory
+suggestions while the input is active. Path validation may run while typing to
+keep the input state accurate, but validation errors must not be rendered inside
+the popup. `Enter` must not commit an invalid directory value; it must show the
+English error in the editor footer, where the standard editor notices appear.
+The UI must consume the injected `DirectoryCatalog` port and must never
+enumerate the filesystem directly. The initial local implementation uses the
+shared `FileSystem` and `PathResolver`; future operating-system implementations
+may provide their own catalog without changing the editor.
 
-The `Start Docker Compose stack` action has one `Compose file` field and one `Working directory` field. The working directory is shown and edited first. Once it is configured, the Compose file field reuses the same fixed-height path-completion surface and keyboard navigation as directory inputs, but its catalog lists only YAML files (`.yaml` and `.yml`) relative to that working directory. `Tab` and `Enter` complete or apply the selected file name without appending a directory separator. The Compose configuration must not expose a user-editable Compose project-name field or a list of Compose files.
+The `Start Docker Compose stack` action has one `Compose file` field and one
+`Working directory` field. The working directory is shown and edited first. Once
+it is configured, the Compose file field reuses the same fixed-height
+path-completion surface and keyboard navigation as directory inputs, but its
+catalog lists only YAML files (`.yaml` and `.yml`) relative to that working
+directory. `Tab` and `Enter` complete or apply the selected file name without
+appending a directory separator. The Compose configuration must not expose a
+user-editable Compose project-name field or a list of Compose files.
 
-Every editable text field in the editor must render the native terminal cursor at the current insertion point. Text editing must support `Left`, `Right`, `Home`, `End`, character insertion, `Backspace`, and `Delete`. Cursor movement must operate on valid character boundaries, keep the insertion point visible when the value is wider than the field, and never be represented by a fake text character.
+Every editable text field in the editor must render the native terminal cursor
+at the current insertion point. Text editing must support `Left`, `Right`,
+`Home`, `End`, character insertion, `Backspace`, and `Delete`. Cursor movement
+must operate on valid character boundaries, keep the insertion point visible
+when the value is wider than the field, and never be represented by a fake text
+character.
 
 ### 8.4 Desktop workspace targets
 
@@ -508,15 +685,30 @@ Create a named workspace
 No workspace movement
 ```
 
-The actual desktop workspace identifier resolved during execution must be persisted in runtime state when it is needed for cleanup.
+The actual desktop workspace identifier resolved during execution must be
+persisted in runtime state when it is needed for cleanup.
 
-A configured workspace ID is a virtual workspace binding shared by every action that references it. Resolve each referenced target once during run preparation, before action execution, and anchor it to the concrete desktop workspace identifier returned by the initial snapshot. When an active runtime state already contains a concrete workspace identity for a `next_empty` binding and that workspace still exists, reuse that identity before searching for a new empty workspace. Every action that references the same workspace ID must use the same concrete identifier for the entire run, including dependent actions such as tiling. Distinct `next_empty` workspace bindings must reserve their selected identities in deterministic order. Handlers must never independently re-resolve `next_empty` after setup begins.
+A configured workspace ID is a virtual workspace binding shared by every action
+that references it. Resolve each referenced target once during run preparation,
+before action execution, and anchor it to the concrete desktop workspace
+identifier returned by the initial snapshot. When an active runtime state
+already contains a concrete workspace identity for a `next_empty` binding and
+that workspace still exists, reuse that identity before searching for a new
+empty workspace. Every action that references the same workspace ID must use the
+same concrete identifier for the entire run, including dependent actions such as
+tiling. Distinct `next_empty` workspace bindings must reserve their selected
+identities in deterministic order. Handlers must never independently re-resolve
+`next_empty` after setup begins.
 
-Different actions may target different desktop workspaces in the same environment. For example, Docker Desktop may remain on the current workspace, the desktop application and Android Emulator may share another workspace, and the API project may open in a third workspace.
+Different actions may target different desktop workspaces in the same
+environment. For example, Docker Desktop may remain on the current workspace,
+the desktop application and Android Emulator may share another workspace, and
+the API project may open in a third workspace.
 
 ### 8.5 Tiling
 
-Tiling is a workspace-level setting, not a collection of hand-authored pixel positions in the MVP.
+Tiling is a workspace-level setting, not a collection of hand-authored pixel
+positions in the MVP.
 
 Each configured desktop workspace may specify:
 
@@ -530,9 +722,13 @@ or:
 tiling = false
 ```
 
-When starting an environment, record the previous tiling value before changing it. When stopping or rolling back, restore the previous value. If the desired value already matches the current value, do not create a mutation record or perform a redundant desktop call.
+When starting an environment, record the previous tiling value before changing
+it. When stopping or rolling back, restore the previous value. If the desired
+value already matches the current value, do not create a mutation record or
+perform a redundant desktop call.
 
-COSMIC may automatically place windows side by side when tiling is enabled. The environment does not need to define manual left/right coordinates for the MVP.
+COSMIC may automatically place windows side by side when tiling is enabled. The
+environment does not need to define manual left/right coordinates for the MVP.
 
 ### 8.6 Application and project actions
 
@@ -545,11 +741,50 @@ An application action may:
 - wait until the window is discoverable;
 - record the window identity and ownership.
 
-For Zed, VS Code, and Cursor, the project folder is explicit and is the action's reconciliation key within that editor profile. A matching existing editor window should be reused when it represents the requested project, regardless of its current desktop workspace. Its workspace must be checked independently: when a configured destination differs, the action must move the existing window and must not launch a duplicate. The backend must compare observed project paths after expanding supported home aliases and canonicalizing them when possible. When COSMIC does not expose project metadata for a window, observation may use the persisted canonical project key together with the persisted stable window identity, but only after verifying that the current window belongs to the expected editor profile. For manually opened windows without persisted state, a profile-specific title fallback is allowed only after the expected COSMIC application identity has been verified. VS Code and Cursor titles must contain their recognized editor suffix, and their project component must exactly match the requested directory basename; Zed may use either its recognized suffix or its observed project-title forms, where the title is exactly the project basename or starts with that basename followed by a supported file separator. A generic title without a recognized editor identity or a valid editor-specific project-title form is never sufficient, and multiple fallback matches remain ambiguous. A new window opened by the environment must be recorded, placed when it is provisioned, and may be closed by `stop` only when ownership rules allow it. The three project-editor actions must share one implementation path parameterized by editor profile, launch executable, new-window flag, application identifiers, and capability requirements.
+For Zed, VS Code, and Cursor, the project folder is explicit and is the action's
+reconciliation key within that editor profile. A matching existing editor window
+should be reused when it represents the requested project, regardless of its
+current desktop workspace. Its workspace must be checked independently: when a
+configured destination differs, the action must move the existing window and
+must not launch a duplicate. The backend must compare observed project paths
+after expanding supported home aliases and canonicalizing them when possible.
+When COSMIC does not expose project metadata for a window, observation may use
+the persisted canonical project key together with the persisted stable window
+identity, but only after verifying that the current window belongs to the
+expected editor profile. For manually opened windows without persisted state, a
+profile-specific title fallback is allowed only after the expected COSMIC
+application identity has been verified. VS Code and Cursor titles must contain
+their recognized editor suffix, and their project component must exactly match
+the requested directory basename; Zed may use either its recognized suffix or
+its observed project-title forms, where the title is exactly the project
+basename or starts with that basename followed by a supported file separator. A
+generic title without a recognized editor identity or a valid editor-specific
+project-title form is never sufficient, and multiple fallback matches remain
+ambiguous. A new window opened by the environment must be recorded, placed when
+it is provisioned, and may be closed by `stop` only when ownership rules allow
+it. The three project-editor actions must share one implementation path
+parameterized by editor profile, launch executable, new-window flag, application
+identifiers, and capability requirements.
 
-The `Open application` inspector field is a resource selector, never a free-form text field. The editor receives its options from the injected `ApplicationCatalog` port for the detected platform. The initial Linux implementation discovers visible, launchable `.desktop` entries from the standard user, system, Flatpak, and Snap application directories. The persisted application value is the platform-native desktop-entry ID; the editor displays the friendly application name and keeps the ID as secondary detail. If discovery is unavailable or returns no applications, the editor must show an actionable error and must not accept an arbitrary application name.
+The `Open application` inspector field is a resource selector, never a free-form
+text field. The editor receives its options from the injected
+`ApplicationCatalog` port for the detected platform. The initial Linux
+implementation discovers visible, launchable `.desktop` entries from the
+standard user, system, Flatpak, and Snap application directories. The persisted
+application value is the platform-native desktop-entry ID; the editor displays
+the friendly application name and keeps the ID as secondary detail. If discovery
+is unavailable or returns no applications, the editor must show an actionable
+error and must not accept an arbitrary application name.
 
-The `Open application` action also exposes an `Arguments` text field. It accepts an argv line with the same quoting rules as command editing, persists the parsed arguments as a vector, and appends them to the selected desktop entry's launch arguments. Application arguments must be passed directly through `ProcessRequest`; they must never be interpolated into a shell command. The desktop entry's static `Exec` arguments remain separate from user-provided arguments so the application selector stays platform-native while the action remains configurable for applications such as VS Code, Chrome, Slack, or any other discovered launchable application.
+The `Open application` action also exposes an `Arguments` text field. It accepts
+an argv line with the same quoting rules as command editing, persists the parsed
+arguments as a vector, and appends them to the selected desktop entry's launch
+arguments. Application arguments must be passed directly through
+`ProcessRequest`; they must never be interpolated into a shell command. The
+desktop entry's static `Exec` arguments remain separate from user-provided
+arguments so the application selector stays platform-native while the action
+remains configurable for applications such as VS Code, Chrome, Slack, or any
+other discovered launchable application.
 
 ### 8.7 Command execution modes
 
@@ -560,22 +795,29 @@ Run once
 Background
 ```
 
-`Run once` actions execute during setup, show live progress and captured stdout/stderr in the TUI, wait for completion, and participate in dependency failure handling.
+`Run once` actions execute during setup, show live progress and captured
+stdout/stderr in the TUI, wait for completion, and participate in dependency
+failure handling.
 
-`Background` actions continue after the main process exits. They must be attached to the environment's tmux session through the terminal backend.
+`Background` actions continue after the main process exits. They must be
+attached to the environment's tmux session through the terminal backend.
 
-The UI should distinguish structured executable execution from an explicit free-form shell command. Structured execution is preferred:
+The UI should distinguish structured executable execution from an explicit
+free-form shell command. Structured execution is preferred:
 
 ```text
 Executable: bun
 Arguments: android
 ```
 
-Free-form shell syntax such as pipes, redirects, command substitution, and chained commands must be an explicit shell-command mode. Never silently pass every command through a shell.
+Free-form shell syntax such as pipes, redirects, command substitution, and
+chained commands must be an explicit shell-command mode. Never silently pass
+every command through a shell.
 
 ### 8.8 Readiness checks
 
-Readiness checks are reusable action capabilities. The first release must support these check types:
+Readiness checks are reusable action capabilities. The first release must
+support these check types:
 
 ```text
 No wait
@@ -587,11 +829,14 @@ Container health or running state
 Compose services health or running state
 ```
 
-Checks must have explicit timeouts. They must report progress without blocking unrelated branches of the graph. A failed required check is an action failure and triggers rollback.
+Checks must have explicit timeouts. They must report progress without blocking
+unrelated branches of the graph. A failed required check is an action failure
+and triggers rollback.
 
 ### 8.9 Canonical typed configuration model
 
-The persisted configuration should deserialize into a typed model with these conceptual fields:
+The persisted configuration should deserialize into a typed model with these
+conceptual fields:
 
 ```text
 EnvironmentConfig
@@ -646,13 +891,18 @@ ActionKind
   start_other_environment
 ```
 
-The exact Rust representation may use enums and tagged Serde data rather than a single flat TOML table, but the model must preserve these semantics. Avoid parallel arrays or positional relationships between unrelated collections.
+The exact Rust representation may use enums and tagged Serde data rather than a
+single flat TOML table, but the model must preserve these semantics. Avoid
+parallel arrays or positional relationships between unrelated collections.
 
-The environment file must contain desired state only. Runtime discoveries such as process IDs, window identifiers, actual workspace identifiers, ownership flags, and previous tiling values belong in `state.toml`.
+The environment file must contain desired state only. Runtime discoveries such
+as process IDs, window identifiers, actual workspace identifiers, ownership
+flags, and previous tiling values belong in `state.toml`.
 
 ### 8.10 Canonical runtime state model
 
-Runtime state should deserialize into a typed model with these conceptual fields:
+Runtime state should deserialize into a typed model with these conceptual
+fields:
 
 ```text
 RuntimeState
@@ -687,7 +937,10 @@ MutationRecord
   restored
 ```
 
-At minimum, runtime status must distinguish `active`, `ready`, `partial`, `rolling_back`, `rollback_failed`, and `stopped`. A stale or incomplete state file must cause a repairable diagnostic, not an assumption that every resource is safe to delete.
+At minimum, runtime status must distinguish `active`, `ready`, `partial`,
+`rolling_back`, `rollback_failed`, and `stopped`. A stale or incomplete state
+file must cause a repairable diagnostic, not an assumption that every resource
+is safe to delete.
 
 ## 9. Execution and reconciliation
 
@@ -695,7 +948,8 @@ At minimum, runtime status must distinguish `active`, `ready`, `partial`, `rolli
 
 Running an environment is a desired-state reconciliation, not a blind restart.
 
-For every action, the handler must be able to observe the relevant current state and decide whether the desired state is already satisfied.
+For every action, the handler must be able to observe the relevant current state
+and decide whether the desired state is already satisfied.
 
 The scheduler should follow this conceptual flow:
 
@@ -714,11 +968,28 @@ Print the summary
 Exit
 ```
 
-If everything is already correct, the execution should finish without restarting, closing, or recreating resources.
+If everything is already correct, the execution should finish without
+restarting, closing, or recreating resources.
 
-Docker Compose is the explicit orchestration exception. For `Start Docker Compose stack`, Workstate must not reconcile individual service containers or compare persisted container IDs with the current Compose output. The Compose project is the managed resource, and Docker Compose is the source of truth for its service state. Workstate validates the request, ensures the Docker Engine is ready, invokes `docker compose up --detach` or the configured equivalent on every run, uses a post-up observation only for verification and readiness, and invokes one `docker compose down` during cleanup when the project-level ownership record permits it. Runtime state must retain the Compose project identity and ownership; service-container records are not required for Compose cleanup.
+Docker Compose is the explicit orchestration exception. For
+`Start Docker Compose stack`, Workstate must not reconcile individual service
+containers or compare persisted container IDs with the current Compose output.
+The Compose project is the managed resource, and Docker Compose is the source of
+truth for its service state. Workstate validates the request, ensures the Docker
+Engine is ready, invokes `docker compose up --detach` or the configured
+equivalent on every run, uses a post-up observation only for verification and
+readiness, and invokes one `docker compose down` during cleanup when the
+project-level ownership record permits it. Runtime state must retain the Compose
+project identity and ownership; service-container records are not required for
+Compose cleanup.
 
-Docker image pulls are another explicit timeout exception during action execution. Direct container creation and Compose startup may wait for a large image download, so the scheduler's short default action timeout must not abort those operations. Docker action handlers run without an outer action timeout by default, while remaining cancellation-aware and still honoring an explicit timeout configured on the action. Docker Engine readiness and readiness checks retain their own bounded timeouts.
+Docker image pulls are another explicit timeout exception during action
+execution. Direct container creation and Compose startup may wait for a large
+image download, so the scheduler's short default action timeout must not abort
+those operations. Docker action handlers run without an outer action timeout by
+default, while remaining cancellation-aware and still honoring an explicit
+timeout configured on the action. Docker Engine readiness and readiness checks
+retain their own bounded timeouts.
 
 ### 9.2 Transactional setup
 
@@ -728,7 +999,8 @@ The engine must:
 
 1. record the observed state before changing a resource;
 2. record whether the resource existed before this run;
-3. record each successful mutation immediately in `state.toml` using atomic persistence;
+3. record each successful mutation immediately in `state.toml` using atomic
+   persistence;
 4. associate a compensation operation with every reversible mutation;
 5. stop scheduling new dependent work after a required failure;
 6. execute compensations in reverse dependency order;
@@ -736,11 +1008,15 @@ The engine must:
 8. show the primary error and any compensation errors;
 9. exit with code `1`.
 
-If independent actions are already running when a failure occurs, the engine must stop scheduling new work and reconcile the active run toward rollback. A handler may finish an in-flight operation only when cancellation is unsafe; it must then record the resulting state before compensation.
+If independent actions are already running when a failure occurs, the engine
+must stop scheduling new work and reconcile the active run toward rollback. A
+handler may finish an in-flight operation only when cancellation is unsafe; it
+must then record the resulting state before compensation.
 
 ### 9.3 Failure behavior
 
-The default failure policy is fail and compensate. Do not leave a partially initialized environment running silently.
+The default failure policy is fail and compensate. Do not leave a partially
+initialized environment running silently.
 
 The failure UI must distinguish:
 
@@ -753,11 +1029,13 @@ Persistent log location
 Suggested next command
 ```
 
-If rollback itself fails, preserve enough state for a later `stop` or repair flow. Do not delete a state file merely because cleanup was incomplete.
+If rollback itself fails, preserve enough state for a later `stop` or repair
+flow. Do not delete a state file merely because cleanup was incomplete.
 
 ### 9.4 Ownership and shared resources
 
-Ownership must be explicit in runtime state. At minimum, each tracked resource needs:
+Ownership must be explicit in runtime state. At minimum, each tracked resource
+needs:
 
 ```text
 resource identity
@@ -772,19 +1050,28 @@ cleanup policy
 
 Examples:
 
-- If Docker Desktop was already active, the environment may use it but must not stop it during rollback or `stop`.
-- If a container was already running, the environment may wait for it but must not stop it.
+- If Docker Desktop was already active, the environment may use it but must not
+  stop it during rollback or `stop`.
+- If a container was already running, the environment may wait for it but must
+  not stop it.
 - If a Compose stack was started by another active environment, preserve it.
 - If a project-editor window existed before the run, preserve it.
-- If the environment opened a new project-editor window, it may close it only if another active environment does not depend on that same window.
-- If tiling was disabled before the run and the environment enabled it, restore it to disabled.
-- If an environment created its tmux session, it owns that session. If an identical session pre-existed and was reused, it must not be killed automatically.
+- If the environment opened a new project-editor window, it may close it only if
+  another active environment does not depend on that same window.
+- If tiling was disabled before the run and the environment enabled it, restore
+  it to disabled.
+- If an environment created its tmux session, it owns that session. If an
+  identical session pre-existed and was reused, it must not be killed
+  automatically.
 
-Shared-resource checks must inspect active environment state, not only the current environment's configuration. A future shared-resource registry may improve this behavior, but the ownership rule is mandatory now.
+Shared-resource checks must inspect active environment state, not only the
+current environment's configuration. A future shared-resource registry may
+improve this behavior, but the ownership rule is mandatory now.
 
 ## 10. tmux behavior
 
-tmux is a backend for persistent terminal execution, not the lifetime of the main `workstate` process.
+tmux is a backend for persistent terminal execution, not the lifetime of the
+main `workstate` process.
 
 ### 10.1 Session layout
 
@@ -794,15 +1081,18 @@ There is one tmux session per environment. The canonical default name is:
 workstate-<environment-slug>
 ```
 
-Each background command gets a separate tmux window. Window names must be stable, readable, slugified, and unique within the session.
+Each background command gets a separate tmux window. Window names must be
+stable, readable, slugified, and unique within the session.
 
 Run-once commands must not create a tmux window merely to capture output.
 
-The terminal backend owns all tmux interaction. The application layer must not invoke tmux commands directly.
+The terminal backend owns all tmux interaction. The application layer must not
+invoke tmux commands directly.
 
 ### 10.2 Process lifetime
 
-When setup completes, the main process exits. Background tmux sessions and their processes continue independently.
+When setup completes, the main process exits. Background tmux sessions and their
+processes continue independently.
 
 The final summary must include an English inspection instruction:
 
@@ -813,54 +1103,73 @@ Inspect background processes with:
 
 The actual environment slug must be substituted in the final output.
 
-If a background command exits unexpectedly, record its exit status and make that information available through state and logs. Do not report the environment as fully healthy if a required persistent action has exited.
+If a background command exits unexpectedly, record its exit status and make that
+information available through state and logs. Do not report the environment as
+fully healthy if a required persistent action has exited.
 
 ### 10.3 tmux cleanup
 
-`stop` kills only the environment-owned tmux session. It must tolerate a session that has already been manually stopped and must preserve any session that was only reused or is shared.
+`stop` kills only the environment-owned tmux session. It must tolerate a session
+that has already been manually stopped and must preserve any session that was
+only reused or is shared.
 
 Do not kill arbitrary tmux sessions based on a partial name match.
 
 ## 11. Docker behavior
 
-Docker support includes Docker Desktop, Docker Engine, direct containers, and Docker Compose projects.
+Docker support includes Docker Desktop, Docker Engine, direct containers, and
+Docker Compose projects.
 
 ### 11.1 Docker readiness
 
-When an environment requires Docker, every Docker action must pass through the same
-`DockerEngineController` readiness preflight. The preflight is the only place that may
-decide whether a local Docker service should be started. It must:
+When an environment requires Docker, every Docker action must pass through the
+same `DockerEngineController` readiness preflight. The preflight is the only
+place that may decide whether a local Docker service should be started. It must:
 
 1. execute `docker info` through the injected process runner;
-2. use the exact Docker CLI environment that the later action will use, including
-   `DOCKER_HOST`, `DOCKER_CONTEXT`, TLS settings, and Docker configuration paths;
-3. return immediately without starting services or changing context when the probe succeeds;
-4. inspect the selected context and endpoint conservatively when the probe fails;
-5. start `systemctl --user start docker-desktop` only for a detected Linux Docker Desktop
-   user service that is installed but inactive;
-6. start `systemctl --user start docker` only for a detected rootless user service that is
-   installed but inactive;
-7. never start a user service when the selected endpoint is an explicit global socket;
+2. use the exact Docker CLI environment that the later action will use,
+   including `DOCKER_HOST`, `DOCKER_CONTEXT`, TLS settings, and Docker
+   configuration paths;
+3. return immediately without starting services or changing context when the
+   probe succeeds;
+4. inspect the selected context and endpoint conservatively when the probe
+   fails;
+5. start `systemctl --user start docker-desktop` only for a detected Linux
+   Docker Desktop user service that is installed but inactive;
+6. start `systemctl --user start docker` only for a detected rootless user
+   service that is installed but inactive;
+7. never start a user service when the selected endpoint is an explicit global
+   socket;
 8. never start local services for a remote context or `DOCKER_HOST` endpoint;
-9. never execute `sudo`, request a password, switch Docker context, change socket permissions,
-   or modify system groups;
-10. poll `docker info` until the selected engine is ready or the readiness timeout expires;
+9. never execute `sudo`, request a password, switch Docker context, change
+   socket permissions, or modify system groups;
+10. poll `docker info` until the selected engine is ready or the readiness
+    timeout expires;
 11. record only services started by the current run as cleanup candidates;
-12. return targeted diagnostics for a missing CLI, invalid context, inaccessible remote host,
-   permission failure, stopped global service, startup failure, initialization timeout, and
-   unknown endpoint instead of guessing.
+12. return targeted diagnostics for a missing CLI, invalid context, inaccessible
+    remote host, permission failure, stopped global service, startup failure,
+    initialization timeout, and unknown endpoint instead of guessing.
 
-The readiness preflight must be synchronized per process so concurrent Docker actions share the
-same startup decision and cannot start the same user service repeatedly. A ready probe must not
-perform service inspection as a side effect. Docker Compose and direct-container handlers must
-invoke this preflight before their first Docker operation, and all subsequent Docker commands
-must retain the same effective environment. The Linux systemd implementation belongs behind the
-Docker platform adapter; non-Linux backends must retain their own existing Docker Desktop launch
-mechanism and must never execute Linux `systemctl` commands.
+The readiness preflight must be synchronized per process so concurrent Docker
+actions share the same startup decision and cannot start the same user service
+repeatedly. A ready probe must not perform service inspection as a side effect.
+Docker Compose and direct-container handlers must invoke this preflight before
+their first Docker operation, and all subsequent Docker commands must retain the
+same effective environment. The Linux systemd implementation belongs behind the
+Docker platform adapter; non-Linux backends must retain their own existing
+Docker Desktop launch mechanism and must never execute Linux `systemctl`
+commands.
 
-External Docker startup may take much longer than the internal `200 ms` performance target. The performance target applies to internal overhead, planning, detection, and dispatch, not the unavoidable readiness time of an external service.
+External Docker startup may take much longer than the internal `200 ms`
+performance target. The performance target applies to internal overhead,
+planning, detection, and dispatch, not the unavoidable readiness time of an
+external service.
 
-Container creation and Compose startup must not use the scheduler's short default action timeout because Docker may need to pull a large image. Their execution timeout is unbounded by default, remains cancellable, and becomes bounded only when the environment explicitly configures an action timeout. Engine readiness and readiness checks remain independently bounded.
+Container creation and Compose startup must not use the scheduler's short
+default action timeout because Docker may need to pull a large image. Their
+execution timeout is unbounded by default, remains cancellable, and becomes
+bounded only when the environment explicitly configures an action timeout.
+Engine readiness and readiness checks remain independently bounded.
 
 ### 11.2 Existing containers
 
@@ -871,7 +1180,8 @@ For configured existing containers:
 - start it if stopped;
 - wait for its health or running state;
 - record whether this environment started it;
-- stop it only if this environment started it and no other active environment uses it.
+- stop it only if this environment started it and no other active environment
+  uses it.
 
 ### 11.3 Compose projects
 
@@ -879,17 +1189,26 @@ For each Compose project:
 
 - use its explicit configured project directory;
 - use the configured start command;
-- prefer structured process execution, with explicit shell mode when the user configured a shell command;
+- prefer structured process execution, with explicit shell mode when the user
+  configured a shell command;
 - optionally wait for all services to be healthy or running;
-- treat the Compose project, not its individual containers, as the Workstate resource;
-- invoke the configured `up` operation on every environment run so Docker Compose performs its own reconciliation;
-- use a post-up Compose observation only to verify startup and evaluate readiness checks;
+- treat the Compose project, not its individual containers, as the Workstate
+  resource;
+- invoke the configured `up` operation on every environment run so Docker
+  Compose performs its own reconciliation;
+- use a post-up Compose observation only to verify startup and evaluate
+  readiness checks;
 - record the stack identity and project-level ownership;
-- invoke the configured `down` operation once during cleanup when the project-level ownership record allows cleanup;
-- do not require persisted service-container identities to prove that project-level cleanup is safe;
-- preserve the stack when another active environment uses the same Compose directory or stack.
+- invoke the configured `down` operation once during cleanup when the
+  project-level ownership record allows cleanup;
+- do not require persisted service-container identities to prove that
+  project-level cleanup is safe;
+- preserve the stack when another active environment uses the same Compose
+  directory or stack.
 
-Do not compare or individually remove Compose service containers during normal cleanup. Docker Compose owns that orchestration. Shared-resource detection and project-level ownership are still required before invoking `down`.
+Do not compare or individually remove Compose service containers during normal
+cleanup. Docker Compose owns that orchestration. Shared-resource detection and
+project-level ownership are still required before invoking `down`.
 
 ## 12. COSMIC behavior
 
@@ -906,13 +1225,23 @@ It must support:
 - closing only owned windows;
 - detecting windows by stable identifiers whenever possible.
 
-The COSMIC backend communicates with the compositor through its native Wayland protocol adapter. Protocol types and transport details remain isolated inside the COSMIC integration, while the application layer consumes the generic desktop capability ports. Desktop observation and mutation must not be implemented as external process operations.
+The COSMIC backend communicates with the compositor through its native Wayland
+protocol adapter. Protocol types and transport details remain isolated inside
+the COSMIC integration, while the application layer consumes the generic desktop
+capability ports. Desktop observation and mutation must not be implemented as
+external process operations.
 
-The backend must preserve the previous tiling value in runtime state. `stop` and rollback restore the previous value instead of assuming that tiling should always be disabled.
+The backend must preserve the previous tiling value in runtime state. `stop` and
+rollback restore the previous value instead of assuming that tiling should
+always be disabled.
 
 ## 13. Project editor behavior
 
-The project-editor backend must support the `Open Project with Zed`, `Open Project with VS Code`, and `Open Project with Cursor` actions through one shared implementation parameterized by an editor profile. Each profile defines its launch executable, new-window flag, capability, and accepted COSMIC application identifiers.
+The project-editor backend must support the `Open Project with Zed`,
+`Open Project with VS Code`, and `Open Project with Cursor` actions through one
+shared implementation parameterized by an editor profile. Each profile defines
+its launch executable, new-window flag, capability, and accepted COSMIC
+application identifiers.
 
 Each profile must support:
 
@@ -922,11 +1251,23 @@ Each profile must support:
 - waiting for a new window to become discoverable;
 - moving the window to the requested COSMIC workspace;
 - recording window identity and ownership;
-- closing only windows opened by the environment and not needed by another active environment.
+- closing only windows opened by the environment and not needed by another
+  active environment.
 
-Project matching must use stable or sufficiently specific signals. Prefer the normalized project path, then persisted stable window identity, and only then the profile-specific title fallback described above. Project placement is a separate invariant and must be verified against the resolved workspace target. Do not close every window for an editor, and do not identify a project solely by a broad substring when a stronger identity is available.
+Project matching must use stable or sufficiently specific signals. Prefer the
+normalized project path, then persisted stable window identity, and only then
+the profile-specific title fallback described above. Project placement is a
+separate invariant and must be verified against the resolved workspace target.
+Do not close every window for an editor, and do not identify a project solely by
+a broad substring when a stronger identity is available.
 
-Multiple project-editor actions are supported. When desktop observation does not expose project metadata, the backend must serialize the launch-and-observe handoff, take a fresh pre-launch snapshot after acquiring that coordination, and correlate the newly observed window against that snapshot. A different project launched by another action must not make the current project appear ambiguous. Multiple windows that genuinely match the same editor-and-project key remain ambiguous unless a stronger stable identity resolves them.
+Multiple project-editor actions are supported. When desktop observation does not
+expose project metadata, the backend must serialize the launch-and-observe
+handoff, take a fresh pre-launch snapshot after acquiring that coordination, and
+correlate the newly observed window against that snapshot. A different project
+launched by another action must not make the current project appear ambiguous.
+Multiple windows that genuinely match the same editor-and-project key remain
+ambiguous unless a stronger stable identity resolves them.
 
 ## 14. Android Emulator behavior
 
@@ -934,7 +1275,8 @@ The Android backend must support:
 
 - locating `adb` and the emulator binary;
 - listing available AVDs;
-- allowing the environment configuration to choose the AVD or an automatic selection policy;
+- allowing the environment configuration to choose the AVD or an automatic
+  selection policy;
 - recording running emulator devices before startup;
 - starting the selected emulator independently of the main process;
 - waiting for a new emulator device to appear;
@@ -944,7 +1286,8 @@ The Android backend must support:
 - stopping only the emulator started by this environment;
 - tolerating an emulator that has already stopped.
 
-Do not kill an emulator that was already running before the environment execution.
+Do not kill an emulator that was already running before the environment
+execution.
 
 ## 15. Persistence model
 
@@ -956,7 +1299,8 @@ All Workstate data belongs under:
 ~/.workstate
 ```
 
-Do not split environment configuration and state across unrelated roots. All Workstate data belongs under the per-environment directories described below.
+Do not split environment configuration and state across unrelated roots. All
+Workstate data belongs under the per-environment directories described below.
 
 ### 15.2 Per-environment directory
 
@@ -971,21 +1315,30 @@ Each environment owns one directory:
     └── runtime/
 ```
 
-`runtime/` is optional and may contain generated helper artifacts that are required for safe process lifetime management. Generated files must remain scoped to the environment directory.
+`runtime/` is optional and may contain generated helper artifacts that are
+required for safe process lifetime management. Generated files must remain
+scoped to the environment directory.
 
 ### 15.3 Configuration
 
-`environment.toml` is the source of truth for desired state. It must be human-readable, deterministic, and safe to edit.
+`environment.toml` is the source of truth for desired state. It must be
+human-readable, deterministic, and safe to edit.
 
-The configuration must not be executable shell code. Never use `source`, `eval`, or equivalent shell evaluation to load configuration.
+The configuration must not be executable shell code. Never use `source`, `eval`,
+or equivalent shell evaluation to load configuration.
 
-Use typed Rust deserialization with a schema version. Unknown fields should be handled according to an explicit compatibility policy; do not silently reinterpret them.
+Use typed Rust deserialization with a schema version. Unknown fields should be
+handled according to an explicit compatibility policy; do not silently
+reinterpret them.
 
 ### 15.4 Runtime state
 
-`state.toml` records observed resources, ownership, mutations, active run information, and cleanup data. It is not the desired configuration.
+`state.toml` records observed resources, ownership, mutations, active run
+information, and cleanup data. It is not the desired configuration.
 
-Runtime state should include enough information to perform `stop` after the original setup process has exited. It must not depend on in-memory data surviving between commands.
+Runtime state should include enough information to perform `stop` after the
+original setup process has exited. It must not depend on in-memory data
+surviving between commands.
 
 Persist state atomically:
 
@@ -998,7 +1351,8 @@ Do not truncate the only valid state file before a replacement file is ready.
 
 ### 15.5 Logs
 
-Logs belong under the environment's `logs/` directory. They should be grouped by run and action when practical.
+Logs belong under the environment's `logs/` directory. They should be grouped by
+run and action when practical.
 
 Logs must:
 
@@ -1011,9 +1365,11 @@ Logs must:
 
 ## 16. Rust architecture
 
-The project uses one Rust crate: the existing `workstate` crate. Do not split it into multiple crates for the MVP.
+The project uses one Rust crate: the existing `workstate` crate. Do not split it
+into multiple crates for the MVP.
 
-`src/main.rs` must remain a thin binary entrypoint. `src/lib.rs` is the composition and library boundary used by integration tests.
+`src/main.rs` must remain a thin binary entrypoint. `src/lib.rs` is the
+composition and library boundary used by integration tests.
 
 ### 16.1 Canonical directory structure
 
@@ -1141,7 +1497,9 @@ src/
         └── errors.rs
 ```
 
-The tree may grow, but new files must preserve the same boundaries. Do not create a miscellaneous `utils.rs` dumping ground. Place helpers beside the concept they serve or create a narrow, named abstraction.
+The tree may grow, but new files must preserve the same boundaries. Do not
+create a miscellaneous `utils.rs` dumping ground. Place helpers beside the
+concept they serve or create a narrow, named abstraction.
 
 ### 16.2 Layer responsibilities
 
@@ -1154,19 +1512,26 @@ The tree may grow, but new files must preserve the same boundaries. Do not creat
 - invoke the CLI runner;
 - translate the final typed error into an English message and exit code.
 
-It must not contain business logic, backend calls, configuration parsing details, or TUI rendering.
+It must not contain business logic, backend calls, configuration parsing
+details, or TUI rendering.
 
 #### `lib.rs`
 
-`lib.rs` declares modules and exposes the composition surface required by tests. Keep public exports minimal and intentional.
+`lib.rs` declares modules and exposes the composition surface required by tests.
+Keep public exports minimal and intentional.
 
 #### `cli/`
 
-`cli/` owns Clap argument parsing, command dispatch, flag semantics, and terminal output policy. It may call application use cases but must not implement reconciliation or external integrations.
+`cli/` owns Clap argument parsing, command dispatch, flag semantics, and
+terminal output policy. It may call application use cases but must not implement
+reconciliation or external integrations.
 
 #### `ui/`
 
-`ui/` owns the Ratatui event loop, screens, widgets, keyboard handling, form state, graph editor state, and progress rendering. UI state must be convertible to validated domain commands or configuration values. The UI must not execute Docker, tmux, COSMIC, Zed, VS Code, Cursor, or emulator calls directly.
+`ui/` owns the Ratatui event loop, screens, widgets, keyboard handling, form
+state, graph editor state, and progress rendering. UI state must be convertible
+to validated domain commands or configuration values. The UI must not execute
+Docker, tmux, COSMIC, Zed, VS Code, Cursor, or emulator calls directly.
 
 #### `domain/`
 
@@ -1183,7 +1548,8 @@ It must not contain business logic, backend calls, configuration parsing details
 - runtime state transitions;
 - domain errors.
 
-The domain must not know about the filesystem, processes, Tokio, tmux, COSMIC, Docker, Zed, VS Code, Cursor, Android, or terminal rendering.
+The domain must not know about the filesystem, processes, Tokio, tmux, COSMIC,
+Docker, Zed, VS Code, Cursor, Android, or terminal rendering.
 
 #### `application/`
 
@@ -1203,23 +1569,31 @@ It depends on ports, not concrete integrations.
 
 #### `application/ports/`
 
-`application/ports/` defines traits and data contracts for side effects. Contracts must be narrow, capability-oriented, and testable.
+`application/ports/` defines traits and data contracts for side effects.
+Contracts must be narrow, capability-oriented, and testable.
 
 #### `infrastructure/`
 
-`infrastructure/` implements generic technical concerns such as local file I/O, TOML persistence, atomic writes, the Tokio process runner, and the system clock. It must not own product orchestration.
+`infrastructure/` implements generic technical concerns such as local file I/O,
+TOML persistence, atomic writes, the Tokio process runner, and the system clock.
+It must not own product orchestration.
 
 #### `platform/`
 
-`platform/` detects and describes the operating system, distribution, desktop environment, and platform-level capabilities. It contains platform-specific support logic such as Linux and COSMIC desktop detection.
+`platform/` detects and describes the operating system, distribution, desktop
+environment, and platform-level capabilities. It contains platform-specific
+support logic such as Linux and COSMIC desktop detection.
 
 #### `integrations/`
 
-`integrations/` implements external-tool adapters. Each integration communicates through injected ports and returns typed domain/application data. Integrations never invoke each other directly.
+`integrations/` implements external-tool adapters. Each integration communicates
+through injected ports and returns typed domain/application data. Integrations
+never invoke each other directly.
 
 ### 16.3 Ports and dependency injection
 
-The `AppContext` is the composition root's dependency container. It should own or reference:
+The `AppContext` is the composition root's dependency container. It should own
+or reference:
 
 ```text
 ConfigStore
@@ -1238,15 +1612,20 @@ EmulatorBackend
 IntegrationRegistry
 ```
 
-No application module may construct a global singleton or reach into process environment, filesystem, or external commands directly.
+No application module may construct a global singleton or reach into process
+environment, filesystem, or external commands directly.
 
-Use references to traits (`&dyn Trait`) where possible. Use `Arc` only when a dependency must be shared across concurrently running Tokio tasks. Do not add synchronization wrappers speculatively.
+Use references to traits (`&dyn Trait`) where possible. Use `Arc` only when a
+dependency must be shared across concurrently running Tokio tasks. Do not add
+synchronization wrappers speculatively.
 
-The entrypoint is the only composition root. Tests construct their own context with fake ports.
+The entrypoint is the only composition root. Tests construct their own context
+with fake ports.
 
 ### 16.4 Integration registry
 
-The registry maps capability/action kinds to handlers and support descriptors. It must make adding a new integration additive:
+The registry maps capability/action kinds to handlers and support descriptors.
+It must make adding a new integration additive:
 
 1. define or reuse a narrow port;
 2. add a new integration module;
@@ -1255,13 +1634,16 @@ The registry maps capability/action kinds to handlers and support descriptors. I
 5. add capability and compatibility tests;
 6. avoid changes to unrelated integrations and the core scheduler.
 
-Do not build a single `match` statement that must be edited for every platform-specific behavior. A small, explicit registry is preferred over hidden global registration.
+Do not build a single `match` statement that must be edited for every
+platform-specific behavior. A small, explicit registry is preferred over hidden
+global registration.
 
 ## 17. External process policy
 
 ### 17.1 Process runner
 
-All external processes must run through `ProcessRunner` and the Tokio process APIs. The runner is responsible for:
+All external processes must run through `ProcessRunner` and the Tokio process
+APIs. The runner is responsible for:
 
 - executable and argument handling;
 - explicit working directory;
@@ -1273,31 +1655,57 @@ All external processes must run through `ProcessRunner` and the Tokio process AP
 - process identity when needed for ownership;
 - redaction of sensitive values.
 
-Do not call `std::process::Command`, `std::fs`, `systemctl`, `tmux`, `docker`, `zed`, `adb`, or the emulator binary directly from use cases or UI code. Native COSMIC protocol communication must remain behind the desktop integration ports and must not be reached from use cases or UI code.
+Do not call `std::process::Command`, `std::fs`, `systemctl`, `tmux`, `docker`,
+`zed`, `adb`, or the emulator binary directly from use cases or UI code. Native
+COSMIC protocol communication must remain behind the desktop integration ports
+and must not be reached from use cases or UI code.
 
 ### 17.2 Shell commands
 
-Structured executable plus argument execution is the default. A free-form shell command must be represented explicitly in the domain model and executed through a clearly named shell-command path.
+Structured executable plus argument execution is the default. A free-form shell
+command must be represented explicitly in the domain model and executed through
+a clearly named shell-command path.
 
-Never concatenate untrusted values into shell source. When a shell is intentionally required, preserve the user's configured string as the command payload and keep separately configured values out of interpolated shell source whenever possible.
+Never concatenate untrusted values into shell source. When a shell is
+intentionally required, preserve the user's configured string as the command
+payload and keep separately configured values out of interpolated shell source
+whenever possible.
 
 ### 17.3 Timeouts and cancellation
 
-Every external wait must have an explicit timeout or a documented default. The shared default for external action execution, observation, lifecycle cleanup, desktop/editor startup verification, and terminal readiness is `180 seconds`; per-action configuration may provide a shorter explicit timeout. Docker image pulls and Compose image reconciliation are the documented exception to a bounded action-execution default because their duration depends on image size and network speed. They remain cancellation-aware, while engine readiness and readiness checks remain bounded. Use Tokio cancellation and task coordination instead of detached untracked tasks.
+Every external wait must have an explicit timeout or a documented default. The
+shared default for external action execution, observation, lifecycle cleanup,
+desktop/editor startup verification, and terminal readiness is `180 seconds`;
+per-action configuration may provide a shorter explicit timeout. Docker image
+pulls and Compose image reconciliation are the documented exception to a bounded
+action-execution default because their duration depends on image size and
+network speed. They remain cancellation-aware, while engine readiness and
+readiness checks remain bounded. Use Tokio cancellation and task coordination
+instead of detached untracked tasks.
 
-Long-running external operations must emit progress events. The main process may wait for setup readiness but must never require the user to keep the TUI open after setup has completed.
+Long-running external operations must emit progress events. The main process may
+wait for setup readiness but must never require the user to keep the TUI open
+after setup has completed.
 
 ## 18. TUI and interaction design
 
 ### 18.1 Technology
 
-Use `ratatui` for the primary full-screen terminal interface. Use `dialoguer` for focused prompts, confirmations, and small forms when a full-screen interaction is unnecessary. `clap` remains the command-line parsing layer.
+Use `ratatui` for the primary full-screen terminal interface. Use `dialoguer`
+for focused prompts, confirmations, and small forms when a full-screen
+interaction is unnecessary. `clap` remains the command-line parsing layer.
 
-`dialoguer` must not become a replacement for the dynamic environment editor. The editor is a Ratatui application.
+`dialoguer` must not become a replacement for the dynamic environment editor.
+The editor is a Ratatui application.
 
 ### 18.2 Dynamic environment editor
 
-`workstate new [environment]` creates a new environment and `workstate edit [environment]` edits an existing one. When their environment argument is omitted, `new` uses the shared validated text field and `edit` uses the shared saved-environment selector before either command opens the dynamic builder. Both commands must use the same dynamic builder, not a rigid list of technology-specific questions.
+`workstate new [environment]` creates a new environment and
+`workstate edit [environment]` edits an existing one. When their environment
+argument is omitted, `new` uses the shared validated text field and `edit` uses
+the shared saved-environment selector before either command opens the dynamic
+builder. Both commands must use the same dynamic builder, not a rigid list of
+technology-specific questions.
 
 The editor uses a focused two-pane layout:
 
@@ -1312,28 +1720,86 @@ The editor uses a focused two-pane layout:
 ↑↓ navigate  Enter edit  Esc back/exit  s/Ctrl+S save
 ```
 
-The header is always titled `Environment`. It shows the blue `Workstate` brand followed only by the current environment name. It must not display a second environment selector, the process working directory, or unrelated runtime diagnostics in this header.
+The header is always titled `Environment`. It shows the blue `Workstate` brand
+followed only by the current environment name. It must not display a second
+environment selector, the process working directory, or unrelated runtime
+diagnostics in this header.
 
-The left pane contains only the ordered list of configured actions. It does not contain a separate workspace list, a review screen, backend-specific shortcut instructions, or duplicated configuration data. The right pane is the inspector for the currently selected action.
+The left pane contains only the ordered list of configured actions. It does not
+contain a separate workspace list, a review screen, backend-specific shortcut
+instructions, or duplicated configuration data. The right pane is the inspector
+for the currently selected action.
 
-When the action list has focus, it occupies approximately 75% of the main width and the inspector occupies approximately 25%. When the inspector has focus, the action list occupies approximately 20% and the inspector occupies approximately 80%. The focused pane must have a visibly stronger border or title style while the unfocused pane remains readable.
+When the action list has focus, it occupies approximately 75% of the main width
+and the inspector occupies approximately 25%. When the inspector has focus, the
+action list occupies approximately 20% and the inspector occupies approximately
+80%. The focused pane must have a visibly stronger border or title style while
+the unfocused pane remains readable.
 
 The editor has two primary focus states:
 
-- `Actions`: `Up` and `Down` move between actions. `Enter` or `Right` enters the inspector for the selected action. `Esc` exits the editor without saving.
-- `Inspector`: `Up` and `Down` move between fields generated for the selected action. `Enter` edits the selected field. `Esc` or `Left` returns to the action list without leaving the editor.
+- `Actions`: `Up` and `Down` move between actions. `Enter` or `Right` enters the
+  inspector for the selected action. `Esc` exits the editor without saving.
+- `Inspector`: `Up` and `Down` move between fields generated for the selected
+  action. `Enter` edits the selected field. `Esc` or `Left` returns to the
+  action list without leaving the editor.
 
-`Tab` may switch between the two panes as an accessibility and efficiency shortcut, but it must not replace the documented `Enter` and `Esc` flow. The footer always shows a compact, context-sensitive control legend. With the action list focused, it describes action selection, inspector entry, adding, deletion when an action is selected, saving, and exit. With the inspector focused, it describes field selection, field editing, returning to the action list, saving, and exit. Action-list mutations are not available while the inspector is focused. Modal editors replace the legend with their own navigation, confirmation, and cancellation controls. The legend must not grow a list of action-specific hotkeys.
+`Tab` may switch between the two panes as an accessibility and efficiency
+shortcut, but it must not replace the documented `Enter` and `Esc` flow. The
+footer always shows a compact, context-sensitive control legend. With the action
+list focused, it describes action selection, inspector entry, adding, deletion
+when an action is selected, saving, and exit. With the inspector focused, it
+describes field selection, field editing, returning to the action list, saving,
+and exit. Action-list mutations are not available while the inspector is
+focused. Modal editors replace the legend with their own navigation,
+confirmation, and cancellation controls. The legend must not grow a list of
+action-specific hotkeys.
 
-The primary legend shows one canonical shortcut for each operation. In the action list, use `↑↓ Move`, `→ Inspect`, `a Add action`, `d Delete action`, `s Save`, and `q Exit`, omitting `→` and `d` when no action is selected. In the inspector, use `↑↓ Move`, `← Back`, `Enter Edit field`, `s Save`, and `q Exit`, omitting field navigation when no action is selected. Keep alternate bindings such as `Tab`, `Enter` from the action list, `Ctrl+S`, and `Esc` functional, but do not repeat them in the primary legend. The `a` and `d` action-list mutation shortcuts are not active while the inspector is focused. Render key tokens with a stronger, distinct key style and render operation labels with the muted label style.
+The primary legend shows one canonical shortcut for each operation. In the
+action list, use `↑↓ Move`, `→ Inspect`, `a Add action`, `d Delete action`,
+`s Save`, and `q Exit`, omitting `→` and `d` when no action is selected. In the
+inspector, use `↑↓ Move`, `← Back`, `Enter Edit field`, `s Save`, and `q Exit`,
+omitting field navigation when no action is selected. Keep alternate bindings
+such as `Tab`, `Enter` from the action list, `Ctrl+S`, and `Esc` functional, but
+do not repeat them in the primary legend. The `a` and `d` action-list mutation
+shortcuts are not active while the inspector is focused. Render key tokens with
+a stronger, distinct key style and render operation labels with the muted label
+style.
 
-Saving is available through `s` and `Ctrl+S`. Saving still validates the full configuration and requires the normal explicit confirmation before persistence. A failed validation keeps the editor open and displays the error in English. A canceled save or editor exit must preserve the previously persisted configuration byte-for-byte.
+Saving is available through `s` and `Ctrl+S`. Saving still validates the full
+configuration and requires the normal explicit confirmation before persistence.
+A failed validation keeps the editor open and displays the error in English. A
+canceled save or editor exit must preserve the previously persisted
+configuration byte-for-byte.
 
-Duplicate command definitions are a save-time warning, not a validation error. If two or more `Run command` actions have the same complete command specification, the same configured working directory, and the same execution mode, the first save request must show a clear confirmation explaining that the same command is configured more than once. The warning must identify the affected action names, command, working directory, and execution mode when available. `y` continues to the normal save, while `n` or `Esc` cancels the save and keeps the editor open. Do not show this warning while the user is editing or navigating, and do not prevent the user from intentionally keeping duplicate actions.
+Duplicate command definitions are a save-time warning, not a validation error.
+If two or more `Run command` actions have the same complete command
+specification, the same configured working directory, and the same execution
+mode, the first save request must show a clear confirmation explaining that the
+same command is configured more than once. The warning must identify the
+affected action names, command, working directory, and execution mode when
+available. `y` continues to the normal save, while `n` or `Esc` cancels the save
+and keeps the editor open. Do not show this warning while the user is editing or
+navigating, and do not prevent the user from intentionally keeping duplicate
+actions.
 
-Validation feedback is save-driven. Do not populate validation errors while the user is merely navigating or editing. After `s` or `Ctrl+S` fails validation, render the errors in the bottom footer and never inside the contextual inspector. Each action-related validation message must use the action's current display name, falling back to its kind label when no non-empty display name exists. After a displayed invalid field is changed and committed, revalidate the affected validation target and remove the error immediately when it is fixed. Do not introduce a new validation error in the footer until another save attempt.
+Validation feedback is save-driven. Do not populate validation errors while the
+user is merely navigating or editing. After `s` or `Ctrl+S` fails validation,
+render the errors in the bottom footer and never inside the contextual
+inspector. Each action-related validation message must use the action's current
+display name, falling back to its kind label when no non-empty display name
+exists. After a displayed invalid field is changed and committed, revalidate the
+affected validation target and remove the error immediately when it is fixed. Do
+not introduce a new validation error in the footer until another save attempt.
 
-The action palette is opened with `a` while the action list is focused. It may list capability-oriented action kinds because it is the creation surface, but once an action is selected, its inspector must be generated from its `ActionKind`. A field is shown only when it has meaning for that action and is supported by the domain model. Text fields open a focused text editor on `Enter`; enumerated or resource-selection fields open a modal selector with `Up`, `Down`, `Enter`, and `Esc`. Dependency editing uses a multi-select modal with explicit toggles.
+The action palette is opened with `a` while the action list is focused. It may
+list capability-oriented action kinds because it is the creation surface, but
+once an action is selected, its inspector must be generated from its
+`ActionKind`. A field is shown only when it has meaning for that action and is
+supported by the domain model. Text fields open a focused text editor on
+`Enter`; enumerated or resource-selection fields open a modal selector with
+`Up`, `Down`, `Enter`, and `Esc`. Dependency editing uses a multi-select modal
+with explicit toggles.
 
 The contextual field contract for the initial action kinds is:
 
@@ -1357,11 +1823,23 @@ Start Android Emulator     action name, Android virtual device,
 Start Other Environment    action name, target environment, dependencies
 ```
 
-`Open Project with Zed`, `Open Project with VS Code`, and `Open Project with Cursor` are intentionally specialized. Each action selects its editor profile internally, so the inspector must not show `Application`, `Working directory`, or `Execution mode` for these actions. The project directory is configured through `Project path`, and each action may optionally target a desktop workspace.
+`Open Project with Zed`, `Open Project with VS Code`, and
+`Open Project with Cursor` are intentionally specialized. Each action selects
+its editor profile internally, so the inspector must not show `Application`,
+`Working directory`, or `Execution mode` for these actions. The project
+directory is configured through `Project path`, and each action may optionally
+target a desktop workspace.
 
-Workspace configuration is edited through the contextual workspace field of the selected action. The inspector may offer saved workspace targets, the current workspace, a next-empty-workspace target, and a flow for linking a live COSMIC workspace. The live COSMIC picker is a modal interaction and must explain `Enter` to confirm and `Esc` to cancel. It must not reintroduce a permanent workspace pane on the editor screen.
+Workspace configuration is edited through the contextual workspace field of the
+selected action. The inspector may offer saved workspace targets, the current
+workspace, a next-empty-workspace target, and a flow for linking a live COSMIC
+workspace. The live COSMIC picker is a modal interaction and must explain
+`Enter` to confirm and `Esc` to cancel. It must not reintroduce a permanent
+workspace pane on the editor screen.
 
-The user must be able to add resources in any useful order and configure relationships afterward. The editor must allow the user to describe flows such as:
+The user must be able to add resources in any useful order and configure
+relationships afterward. The editor must allow the user to describe flows such
+as:
 
 ```text
 Open Docker Desktop on the current workspace.
@@ -1373,7 +1851,8 @@ Run "bun android" in one background tmux window.
 Run "yarn start:dev" in another background tmux window.
 ```
 
-The editor must expose working directories for every applicable action. It must never silently use the current shell directory.
+The editor must expose working directories for every applicable action. It must
+never silently use the current shell directory.
 
 ### 18.3 Interaction principles
 
@@ -1384,17 +1863,22 @@ The UI must:
 - show dependency and graph errors before saving;
 - make destructive operations explicit;
 - preserve edits on navigation within the editor;
-- avoid forcing the user to know backend implementation details for common actions;
-- reveal useful backend details, such as a tmux session name, in an advanced or inspection area;
+- avoid forcing the user to know backend implementation details for common
+  actions;
+- reveal useful backend details, such as a tmux session name, in an advanced or
+  inspection area;
 - support keyboard navigation and terminal widths smaller than the ideal layout;
 - degrade gracefully when colors or Unicode are unavailable;
 - restore the terminal state on every exit path, including errors.
 
 ### 18.4 Execution TUI
 
-The `run` and `stop` commands must use the same reusable lifecycle progress view. The view consumes application events through a bounded channel and must not poll integrations directly.
+The `run` and `stop` commands must use the same reusable lifecycle progress
+view. The view consumes application events through a bounded channel and must
+not poll integrations directly.
 
-Before the first action starts, render one row for every configured action in configuration order. Each row must expose:
+Before the first action starts, render one row for every configured action in
+configuration order. Each row must expose:
 
 - the user-facing action label;
 - a pending marker while dependencies or scheduling keep it queued;
@@ -1407,20 +1891,32 @@ Before the first action starts, render one row for every configured action in co
 During environment execution, show:
 
 - the environment name;
-- action status (`pending`, `running`, `ready`, `skipped`, `failed`, `cancelled`, `rolling back`, `stopped`);
+- action status (`pending`, `running`, `ready`, `skipped`, `failed`,
+  `cancelled`, `rolling back`, `stopped`);
 - dependency progress;
 - meaningful external command output;
 - elapsed time and timeout where relevant;
 - ownership-sensitive cleanup information;
 - a final summary after setup completes.
 
-The view must update from events even when independent actions are running concurrently. A periodic UI tick must advance elapsed time and the spinner while no application event is available. The header must distinguish starting from stopping, and the activity panel must remain useful for action output and ownership-preserving cleanup messages.
+The view must update from events even when independent actions are running
+concurrently. A periodic UI tick must advance elapsed time and the spinner while
+no application event is available. The header must distinguish starting from
+stopping, and the activity panel must remain useful for action output and
+ownership-preserving cleanup messages.
 
-The TUI must close only after the run/reconciliation phase completes, rollback finishes, or stop cleanup completes or fails. It must not attach the user to tmux or keep the main process alive for background services. Human interactive progress is not emitted for `--quiet` or `--json`; those modes remain free of spinners and terminal control sequences.
+The TUI must close only after the run/reconciliation phase completes, rollback
+finishes, or stop cleanup completes or fails. It must not attach the user to
+tmux or keep the main process alive for background services. Human interactive
+progress is not emitted for `--quiet` or `--json`; those modes remain free of
+spinners and terminal control sequences.
 
 ### 18.5 Final summary
 
-After the lifecycle TUI closes, human output must end with a compact summary card. The card is intentionally less interactive than the progress view, but it must make the outcome easy to scan and the next command easy to copy. Use the same visual language for `run`, `stop`, and their dry-run variants:
+After the lifecycle TUI closes, human output must end with a compact summary
+card. The card is intentionally less interactive than the progress view, but it
+must make the outcome easy to scan and the next command easy to copy. Use the
+same visual language for `run`, `stop`, and their dry-run variants:
 
 - a bordered card with a clear status title;
 - the environment display name on its own line;
@@ -1428,7 +1924,9 @@ After the lifecycle TUI closes, human output must end with a compact summary car
 - background-session and next-command instructions when relevant;
 - no raw implementation identifiers or unnecessary prose.
 
-For a successful run with background work, include the tmux inspection command and the stop command. For a stop, include cleaned and preserved resource counts and show stale-resource information when it is non-zero. Example:
+For a successful run with background work, include the tmux inspection command
+and the stop command. For a stop, include cleaned and preserved resource counts
+and show stale-resource information when it is non-zero. Example:
 
 ```text
 ╭──────────────────────────────────────────────╮
@@ -1447,7 +1945,9 @@ For a successful run with background work, include the tmux inspection command a
 ╰──────────────────────────────────────────────╯
 ```
 
-Human summary cards must remain readable with `--no-color` and must not affect `--json` or `--quiet`. JSON keeps a machine-readable message document without terminal control sequences; quiet mode emits no success summary.
+Human summary cards must remain readable with `--no-color` and must not affect
+`--json` or `--quiet`. JSON keeps a machine-readable message document without
+terminal control sequences; quiet mode emits no success summary.
 
 Do not claim success until required actions and checks are complete.
 
@@ -1455,7 +1955,8 @@ Do not claim success until required actions and checks are complete.
 
 Use Rust stable with edition 2024.
 
-The production dependency set should remain deliberate and minimal. The expected baseline is:
+The production dependency set should remain deliberate and minimal. The expected
+baseline is:
 
 ```text
 clap              command-line parsing
@@ -1471,7 +1972,9 @@ serde_json         structured integration output and machine-readable output whe
 which              executable availability checks when appropriate
 ```
 
-Use a dependency only when it solves a real project requirement. Do not introduce broad utility crates to avoid designing a narrow abstraction. Do not add `anyhow` as a substitute for the project's typed error model.
+Use a dependency only when it solves a real project requirement. Do not
+introduce broad utility crates to avoid designing a narrow abstraction. Do not
+add `anyhow` as a substitute for the project's typed error model.
 
 Expected development dependencies may include:
 
@@ -1483,7 +1986,8 @@ predicates           readable CLI assertions
 criterion             performance benchmarks
 ```
 
-Keep dependency decisions in `Cargo.toml` visible and documented by their use. Avoid runtime network dependencies and telemetry libraries.
+Keep dependency decisions in `Cargo.toml` visible and documented by their use.
+Avoid runtime network dependencies and telemetry libraries.
 
 ## 20. Error, logging, and output conventions
 
@@ -1501,9 +2005,12 @@ IntegrationError
 CliError
 ```
 
-Errors should preserve structured context such as action ID, environment slug, executable, workspace, resource identity, timeout, and exit status. Do not flatten every failure into a string too early.
+Errors should preserve structured context such as action ID, environment slug,
+executable, workspace, resource identity, timeout, and exit status. Do not
+flatten every failure into a string too early.
 
-Only the CLI/output boundary should decide how an error is rendered to the user and which exit code is returned.
+Only the CLI/output boundary should decide how an error is rendered to the user
+and which exit code is returned.
 
 ### 20.2 Message style
 
@@ -1526,19 +2033,23 @@ Check the Docker Desktop service and inspect the environment log at:
 Avoid vague messages such as `Something went wrong`.
 
 Human CLI failures must be rendered at the output boundary as a compact bordered
-error card. The card must separate the error category, primary message, actionable
-next step, and structured diagnostics; use semantic symbols, restrained terminal
-colors, and wrapping that keeps the card readable at normal terminal widths.
-`--no-color` must keep the same structure without ANSI sequences. JSON errors must
-remain machine-readable and must not use the human card.
+error card. The card must separate the error category, primary message,
+actionable next step, and structured diagnostics; use semantic symbols,
+restrained terminal colors, and wrapping that keeps the card readable at normal
+terminal widths. `--no-color` must keep the same structure without ANSI
+sequences. JSON errors must remain machine-readable and must not use the human
+card.
 
 ### 20.3 stdout, stderr, and machine output
 
-Interactive progress belongs in the TUI and human-readable output. Errors and diagnostics may be written to stderr according to the CLI output policy.
+Interactive progress belongs in the TUI and human-readable output. Errors and
+diagnostics may be written to stderr according to the CLI output policy.
 
-When `--json` exists, emit valid machine-readable JSON without spinners, colors, or prose mixed into stdout. Keep human output and machine output separate.
+When `--json` exists, emit valid machine-readable JSON without spinners, colors,
+or prose mixed into stdout. Keep human output and machine output separate.
 
-Do not log secrets, full environment values, passwords, tokens, or sensitive command arguments. Redact configured sensitive values before rendering logs.
+Do not log secrets, full environment values, passwords, tokens, or sensitive
+command arguments. Redact configured sensitive values before rendering logs.
 
 ## 21. Testing strategy
 
@@ -1562,9 +2073,12 @@ tests/
 
 ### 21.2 Fake backends
 
-Normal tests must never alter the developer's desktop, tmux server, Docker daemon, Zed, VS Code, or Cursor windows, Android devices, or filesystem outside a temporary test directory.
+Normal tests must never alter the developer's desktop, tmux server, Docker
+daemon, Zed, VS Code, or Cursor windows, Android devices, or filesystem outside
+a temporary test directory.
 
-Every side-effect port must have a fake or recording implementation suitable for:
+Every side-effect port must have a fake or recording implementation suitable
+for:
 
 - already-correct state;
 - missing state;
@@ -1580,7 +2094,8 @@ Every side-effect port must have a fake or recording implementation suitable for
 
 ### 21.3 TUI snapshots
 
-Use `insta` snapshots for stable TUI states and important output. Snapshots must contain English text and should cover:
+Use `insta` snapshots for stable TUI states and important output. Snapshots must
+contain English text and should cover:
 
 - empty environment selector;
 - populated selector with statuses;
@@ -1598,13 +2113,18 @@ Update snapshots intentionally and review every changed line.
 
 ### 21.4 Live integration tests
 
-Tests that call a real COSMIC session, tmux server, Docker daemon, Zed, VS Code, or Cursor process, or an Android Emulator must be explicitly opt-in and must never run in the normal test suite or CI by accident. Use a clearly named environment gate and document the required host setup.
+Tests that call a real COSMIC session, tmux server, Docker daemon, Zed, VS Code,
+or Cursor process, or an Android Emulator must be explicitly opt-in and must
+never run in the normal test suite or CI by accident. Use a clearly named
+environment gate and document the required host setup.
 
 ## 22. Performance requirements
 
-Performance is a first-class product requirement. Optimize for a perceived-instant experience.
+Performance is a first-class product requirement. Optimize for a
+perceived-instant experience.
 
-The internal target is to keep relevant values below `200 ms` wherever possible, including:
+The internal target is to keep relevant values below `200 ms` wherever possible,
+including:
 
 - binary startup overhead;
 - CLI parsing;
@@ -1615,7 +2135,10 @@ The internal target is to keep relevant values below `200 ms` wherever possible,
 - internal dispatch;
 - state lookup that does not require waiting for external services.
 
-External operations such as starting Docker Desktop, opening a project editor, booting an Android Emulator, or waiting for a health check are excluded from the `200 ms` internal target but must still provide accurate progress and bounded waits.
+External operations such as starting Docker Desktop, opening a project editor,
+booting an Android Emulator, or waiting for a health check are excluded from the
+`200 ms` internal target but must still provide accurate progress and bounded
+waits.
 
 Performance rules:
 
@@ -1631,7 +2154,9 @@ Performance rules:
 - persist state only when a meaningful mutation occurs;
 - benchmark cold startup and planning separately from external setup latency.
 
-Add benchmarks for startup, config loading, graph validation, support detection, and plan generation. Never sacrifice ownership safety or rollback correctness for a micro-optimization.
+Add benchmarks for startup, config loading, graph validation, support detection,
+and plan generation. Never sacrifice ownership safety or rollback correctness
+for a micro-optimization.
 
 ## 23. Formatting, linting, and quality gates
 
@@ -1644,11 +2169,13 @@ cargo test --all-targets
 cargo build --release
 ```
 
-Run snapshot verification when TUI or output code changes. Run persistence and fake-backend integration tests when persistence or lifecycle code changes.
+Run snapshot verification when TUI or output code changes. Run persistence and
+fake-backend integration tests when persistence or lifecycle code changes.
 
 Before considering a change complete, verify:
 
-- no forbidden `unwrap`, `expect`, `panic!`, `unreachable!`, or `todo!` was introduced;
+- no forbidden `unwrap`, `expect`, `panic!`, `unreachable!`, or `todo!` was
+  introduced;
 - no unnecessary source comments were added;
 - all user-facing text is English;
 - no direct external-process call bypasses a port;
@@ -1664,31 +2191,50 @@ Before considering a change complete, verify:
 
 ## 23.1 Release automation
 
-Release automation is defined by `.github/workflows/release.yml` and `release-plz.toml`.
+Release automation is defined by `.github/workflows/release.yml` and
+`release-plz.toml`.
 
 - `release-plz` updates the package version and `CHANGELOG.md` in git-only mode;
 - the project is not published to crates.io by the release pipeline;
-- release-worthy commits use the Conventional Commit prefixes `feat`, `fix`, `perf`, `refactor`, or `docs`, optionally followed by a scope;
-- the release workflow runs on pushes to `main`, commits the generated release changes as `chore(release): v<version>`, creates the annotated `v<version>` tag, and publishes the GitHub Release;
+- release-worthy commits use the Conventional Commit prefixes `feat`, `fix`,
+  `perf`, `refactor`, or `docs`, optionally followed by a scope;
+- the release workflow runs on pushes to `main`, commits the generated release
+  changes as `chore(release): v<version>`, creates the annotated `v<version>`
+  tag, and publishes the GitHub Release;
 - release jobs must not overwrite an existing version tag;
-- every release includes `workstate-x86_64-unknown-linux-gnu.tar.gz`, `workstate-aarch64-unknown-linux-gnu.tar.gz`, and `checksums-sha256.txt`;
+- every release includes `workstate-x86_64-unknown-linux-gnu.tar.gz`,
+  `workstate-aarch64-unknown-linux-gnu.tar.gz`, and `checksums-sha256.txt`;
 - the release matrix currently targets only Linux GNU `x86_64` and `aarch64`;
-- the build must compile the exact tagged release commit before its artifacts are uploaded;
-- the workflow must keep the GitHub token scoped to repository contents and must not require a custom release secret for normal operation.
+- the build must compile the exact tagged release commit before its artifacts
+  are uploaded;
+- the workflow must keep the GitHub token scoped to repository contents and must
+  not require a custom release secret for normal operation.
 
 ## 23.2 Unix installer
 
-`unix.sh` is the distribution bootstrap installer for the published Workstate binary. It is not an environment definition format, a runtime dependency, or a migration path for the earlier shell scripts.
+`unix.sh` is the distribution bootstrap installer for the published Workstate
+binary. It is not an environment definition format, a runtime dependency, or a
+migration path for the earlier shell scripts.
 
-- the installer must run only for Pop!_OS with an active COSMIC desktop session on Linux;
-- unsupported systems must fail before installing packages, downloading binaries, or changing user files;
-- missing `tmux` is installed through the Pop!_OS `apt` package manager after obtaining sudo authorization;
-- native COSMIC communication is provided by Workstate through its isolated Wayland integration; the installer does not download or install a desktop helper binary;
-- the Workstate archive is selected from the detected architecture using the `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu` target;
-- Workstate is installed to `${XDG_BIN_HOME:-$HOME/.local/bin}` without requiring root privileges;
-- the installer downloads and verifies `checksums-sha256.txt` before extracting the Workstate archive;
-- the installer may add the user-local binary directory to the detected shell profile, but must not modify project files or environment configuration;
-- all installer output and errors must remain in English and must provide an actionable next step.
+- the installer must run only for Pop!_OS with an active COSMIC desktop session
+  on Linux;
+- unsupported systems must fail before installing packages, downloading
+  binaries, or changing user files;
+- missing `tmux` is installed through the Pop!_OS `apt` package manager after
+  obtaining sudo authorization;
+- native COSMIC communication is provided by Workstate through its isolated
+  Wayland integration; the installer does not download or install a desktop
+  helper binary;
+- the Workstate archive is selected from the detected architecture using the
+  `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu` target;
+- Workstate is installed to `${XDG_BIN_HOME:-$HOME/.local/bin}` without
+  requiring root privileges;
+- the installer downloads and verifies `checksums-sha256.txt` before extracting
+  the Workstate archive;
+- the installer may add the user-local binary directory to the detected shell
+  profile, but must not modify project files or environment configuration;
+- all installer output and errors must remain in English and must provide an
+  actionable next step.
 
 ## 24. Change workflow for coding agents
 
@@ -1696,7 +2242,8 @@ Before editing:
 
 1. inspect the current repository status;
 2. read the relevant modules and tests;
-3. identify whether the change affects domain, application, infrastructure, platform, integration, CLI, or UI boundaries;
+3. identify whether the change affects domain, application, infrastructure,
+   platform, integration, CLI, or UI boundaries;
 4. preserve unrelated user changes;
 5. define the behavior and failure path before implementing it.
 
@@ -1717,7 +2264,8 @@ After editing:
 2. run Clippy with warnings denied;
 3. run unit and integration tests;
 4. run relevant snapshots;
-5. inspect the diff for accidental comments, language violations, direct side effects, or destructive behavior;
+5. inspect the diff for accidental comments, language violations, direct side
+   effects, or destructive behavior;
 6. report any unverified live-platform behavior explicitly.
 
 ## 25. Definition of done for a feature
@@ -1725,7 +2273,8 @@ After editing:
 A feature is complete only when all applicable items are true:
 
 - its desired state is representable in typed TOML;
-- it can be created or edited through the dynamic Ratatui editor when user configuration is required;
+- it can be created or edited through the dynamic Ratatui editor when user
+  configuration is required;
 - it has a stable action/resource identity;
 - it validates its paths, dependencies, and capabilities;
 - it observes existing state before mutating anything;
@@ -1744,7 +2293,9 @@ A feature is complete only when all applicable items are true:
 
 ## 26. Prior scripts as non-compatibility context
 
-Earlier shell scripts explain the original product idea, but they are not part of the supported input, runtime, or migration surface. Do not add compatibility code for them unless the product specification explicitly changes.
+Earlier shell scripts explain the original product idea, but they are not part
+of the supported input, runtime, or migration surface. Do not add compatibility
+code for them unless the product specification explicitly changes.
 
 They illustrate capabilities such as:
 
@@ -1761,10 +2312,12 @@ They illustrate capabilities such as:
 - creating one tmux session with one window per configured long-running command;
 - waiting on TCP, HTTP, command, or fixed-delay conditions;
 - recording resources started by the environment;
-- stopping tmux, emulator, project-editor windows, containers, Compose stacks, and Docker Desktop according to ownership and sharing rules;
+- stopping tmux, emulator, project-editor windows, containers, Compose stacks,
+  and Docker Desktop according to ownership and sharing rules;
 - removing saved environment configuration.
 
-The Rust implementation should preserve the intended product behavior while using:
+The Rust implementation should preserve the intended product behavior while
+using:
 
 - shell-sourced state with typed TOML;
 - parallel arrays with structured collections;
@@ -1777,7 +2330,8 @@ The Rust implementation should preserve the intended product behavior while usin
 
 ## 27. Final design principle
 
-`workstate` should feel like a fast, quiet, reliable reconciliation engine for a programmer's entire working state:
+`workstate` should feel like a fast, quiet, reliable reconciliation engine for a
+programmer's entire working state:
 
 ```text
 Define the desired work environment once.
