@@ -4,6 +4,12 @@ All notable changes to Workstate are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.7](https://github.com/Theryston/workstate/compare/v0.1.6...v0.1.7) - 2026-09-09
+
+### Added
+
+- *(tmux)* preserve exited windows for failure diagnostics
+
 ## [0.1.6](https://github.com/Theryston/workstate/compare/v0.1.5...v0.1.6) - 2026-09-07
 
 ### Fixed
