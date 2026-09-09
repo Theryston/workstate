@@ -301,8 +301,12 @@ impl CommandActionHandler {
                 ErrorCategory::Integration,
                 "the canonical tmux window exists but its command or working directory changed",
             )
-            .with_context("session_name", expected_session)
-            .with_context("window_identity", window.identity.clone())),
+            .with_context("session_name", expected_session.clone())
+            .with_context("window_identity", window.identity.clone())
+            .with_context(
+                "inspect_command",
+                format!("tmux attach-session -t {expected_session}"),
+            )),
             _ => Err(WorkstateError::new(
                 ErrorCategory::Integration,
                 "multiple tmux windows have the canonical action name",
@@ -347,7 +351,11 @@ impl CommandActionHandler {
                 "the persistent tmux window did not remain healthy after creation",
             )
             .with_context("session_name", target.session_name)
-            .with_context("window_name", target.window_name));
+            .with_context("window_name", target.window_name)
+            .with_context(
+                "inspect_command",
+                format!("tmux attach-session -t {}", target.session_name),
+            ));
         }
         Ok(ActionExecutionResult {
             changed,
@@ -463,6 +471,7 @@ impl CommandActionHandler {
         action: &ActionSpec,
         resources: &[ResourceRecord],
         cancellation: CancellationToken,
+        preserve_failed_diagnostics: bool,
     ) -> Result<CompensationResult> {
         cancellation.check()?;
         let windows = resources
@@ -482,26 +491,36 @@ impl CommandActionHandler {
             cancellation.check()?;
             let session_name = session_name_from_record(action, resource)?;
             let sessions_snapshot = self.tmux.observe().await?;
-            let exists = sessions_snapshot.iter().any(|session| {
-                session.name == session_name
+            let matching_window = sessions_snapshot.iter().find_map(|session| {
+                let session_matches = session.name == session_name
                     && resource
                         .integration_metadata
                         .get("session_identity")
-                        .is_none_or(|identity| identity == &session.identity)
-                    && session.windows.iter().any(|window| {
-                        window.identity == resource.resource.stable_identity
-                            && window.name
-                                == resource
-                                    .integration_metadata
-                                    .get("window_name")
-                                    .map(String::as_str)
-                                    .unwrap_or("")
-                    })
+                        .is_none_or(|identity| identity == &session.identity);
+                if !session_matches {
+                    return None;
+                }
+                session.windows.iter().find(|window| {
+                    window.identity == resource.resource.stable_identity
+                        && window.name
+                            == resource
+                                .integration_metadata
+                                .get("window_name")
+                                .map(String::as_str)
+                                .unwrap_or("")
+                })
             });
-            if !exists {
+            let Some(window) = matching_window else {
                 outputs.push(ActionOutput::log(format!(
                     "tmux window '{}' was already absent",
                     resource.resource.stable_identity
+                )));
+                continue;
+            };
+            if preserve_failed_diagnostics && window.is_dead {
+                outputs.push(ActionOutput::log(format!(
+                    "preserved failed tmux window '{}' for diagnostics; inspect with: tmux attach-session -t {}",
+                    resource.resource.stable_identity, session_name
                 )));
                 continue;
             }
@@ -527,9 +546,18 @@ impl CommandActionHandler {
                 continue;
             };
             if !session.windows.is_empty() {
-                outputs.push(ActionOutput::log(format!(
-                    "preserved tmux session '{session_name}' because unmanaged windows remain"
-                )));
+                let message = if preserve_failed_diagnostics
+                    && session.windows.iter().any(|window| window.is_dead)
+                {
+                    format!(
+                        "preserved tmux session '{session_name}' because an exited pane remains available for diagnostics"
+                    )
+                } else {
+                    format!(
+                        "preserved tmux session '{session_name}' because unmanaged windows remain"
+                    )
+                };
+                outputs.push(ActionOutput::log(message));
                 continue;
             }
             self.tmux.kill_session(&session_name).await?;
@@ -719,7 +747,7 @@ impl ActionHandler for CommandActionHandler {
         cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<CompensationResult>> {
         Box::pin(async move {
-            self.cleanup_inner(action, &result.resources, cancellation)
+            self.cleanup_inner(action, &result.resources, cancellation, true)
                 .await
         })
     }
@@ -730,7 +758,10 @@ impl ActionHandler for CommandActionHandler {
         resources: &'a [ResourceRecord],
         cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<CompensationResult>> {
-        Box::pin(async move { self.cleanup_inner(action, resources, cancellation).await })
+        Box::pin(async move {
+            self.cleanup_inner(action, resources, cancellation, false)
+                .await
+        })
     }
 }
 
@@ -843,6 +874,10 @@ fn window_is_healthy(window: &TmuxWindowSnapshot, request: &ProcessRequest) -> b
 }
 
 fn command_matches_program(command_line: &str, expected_program: &str) -> bool {
+    let command_line = command_line
+        .split_once("; exec ")
+        .map(|(_, command)| command.trim())
+        .unwrap_or(command_line);
     let Some(action_id) = ActionId::new("tmux-observation").ok() else {
         return false;
     };
@@ -932,4 +967,16 @@ pub fn register_handlers(
         .with_session_lock(session_lock);
     registry.register(handler)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_matches_program;
+
+    #[test]
+    fn failure_retention_wrapper_matches_the_original_program() {
+        let command = "/usr/bin/tmux set-option -w -t \"$TMUX_PANE\" remain-on-exit failed >/dev/null 2>&1; exec 'bun' 'android'";
+        assert!(command_matches_program(command, "bun"));
+        assert!(!command_matches_program(command, "node"));
+    }
 }

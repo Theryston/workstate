@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use crate::{
     application::ports::{
@@ -109,7 +114,7 @@ impl TmuxProcessBackend {
         models::validate_name("window", &window.name)?;
         models::validate_process(&window.process)?;
         let requested_window_name = window.name.clone();
-        let command = render_process(&window.process)?;
+        let command = render_process_with_failure_retention(&self.executable, &window.process)?;
         let mut arguments = if create_session {
             vec![
                 "new-session".to_owned(),
@@ -148,19 +153,30 @@ impl TmuxProcessBackend {
                 .filter(|session| session.name == session_name)
                 .collect::<Vec<_>>();
             match matching.as_slice() {
-                [session]
-                    if session
+                [session] => {
+                    let Some(window) = session
                         .windows
                         .iter()
-                        .any(|window| window.name == window_name && !window.is_dead) =>
-                {
+                        .find(|window| window.name == window_name)
+                    else {
+                        if tokio::time::Instant::now() < deadline {
+                            tokio::time::sleep(TMUX_READY_POLL).await;
+                            continue;
+                        }
+                        return Err(errors::readiness_timeout(session_name, window_name));
+                    };
+                    if window.is_dead {
+                        return Err(errors::window_exited_during_startup(
+                            session_name,
+                            window_name,
+                        ));
+                    }
                     return Ok((*session).clone());
                 }
-                [] | [_] if tokio::time::Instant::now() < deadline => {
+                [] if tokio::time::Instant::now() < deadline => {
                     tokio::time::sleep(TMUX_READY_POLL).await;
                 }
                 [] => return Err(errors::readiness_timeout(session_name, window_name)),
-                [_] => return Err(errors::readiness_timeout(session_name, window_name)),
                 _ => {
                     return Err(WorkstateError::new(
                         ErrorCategory::Integration,
@@ -333,6 +349,17 @@ fn render_process(request: &ProcessRequest) -> Result<String> {
             .map(|argument| shell_quote(argument)),
     );
     Ok(parts.join(" "))
+}
+
+fn render_process_with_failure_retention(
+    executable: &Path,
+    request: &ProcessRequest,
+) -> Result<String> {
+    let command = render_process(request)?;
+    let tmux_executable = shell_quote(&executable.to_string_lossy());
+    Ok(format!(
+        "{tmux_executable} set-option -w -t \"$TMUX_PANE\" remain-on-exit failed >/dev/null 2>&1; exec {command}"
+    ))
 }
 
 fn shell_quote(value: &str) -> String {

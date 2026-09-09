@@ -14,7 +14,8 @@ use fake_tmux::{FakeTmux, TmuxCall};
 use workstate::{
     application::{
         planner::{
-            ActionHandler, ActionHandlerRegistry, ActionOutput, ActionOutputSink, CancellationToken,
+            ActionExecutionResult, ActionHandler, ActionHandlerRegistry, ActionOutput,
+            ActionOutputSink, CancellationToken,
         },
         ports::{
             BoxFuture, FileSystem, ProcessOutput, ProcessRunner, ProcessStream, TmuxBackend,
@@ -490,6 +491,76 @@ async fn stop_removes_owned_window_and_session_idempotently() -> TestResult {
 }
 
 #[tokio::test]
+async fn compensation_preserves_failed_tmux_window_for_diagnostics() -> TestResult {
+    let runner: Arc<dyn ProcessRunner> = Arc::new(FakeProcessRunner::default());
+    let tmux = FakeTmux::default();
+    let tmux_view = tmux.clone();
+    let configuration = EnvironmentConfig::new("Personal Blog")?;
+    let action = action(&configuration, "api", ExecutionMode::Background)?;
+    tmux.insert_session(TmuxSessionSnapshot {
+        identity: "session-0".to_owned(),
+        name: session_name(&configuration.slug),
+        windows: vec![TmuxWindowSnapshot {
+            identity: "@0".to_owned(),
+            name: window_name(&action.id),
+            command: Some("bun".to_owned()),
+            start_command: Some("bun".to_owned()),
+            working_directory: Some(std::env::temp_dir()),
+            process_id: Some(42),
+            is_dead: true,
+        }],
+    })?;
+    let tmux: Arc<dyn TmuxBackend> = Arc::new(tmux);
+    let handler = command_handler(runner, tmux)?;
+    let session_identity = ResourceIdentity::new(ResourceKind::TmuxSession, "session-0")
+        .map_err(WorkstateError::from)?;
+    let window_identity =
+        ResourceIdentity::new(ResourceKind::TmuxWindow, "@0").map_err(WorkstateError::from)?;
+    let mut session = ResourceRecord::new(session_identity, OwnershipStatus::CreatedByCurrentRun)
+        .with_action(action.id.clone());
+    session
+        .integration_metadata
+        .insert("session_name".to_owned(), session_name(&configuration.slug));
+    let mut window = ResourceRecord::new(window_identity, OwnershipStatus::CreatedByCurrentRun)
+        .with_action(action.id.clone());
+    window
+        .integration_metadata
+        .insert("session_name".to_owned(), session_name(&configuration.slug));
+    window
+        .integration_metadata
+        .insert("session_identity".to_owned(), "session-0".to_owned());
+    window
+        .integration_metadata
+        .insert("window_name".to_owned(), window_name(&action.id));
+    let result = ActionExecutionResult {
+        changed: true,
+        resources: vec![session, window],
+        mutations: Vec::new(),
+        outputs: Vec::new(),
+    };
+
+    let compensation = handler
+        .compensate(&action, &result, CancellationToken::new())
+        .await?;
+
+    assert_eq!(tmux_view.sessions()?.len(), 1);
+    assert_eq!(tmux_view.sessions()?[0].windows.len(), 1);
+    assert!(tmux_view.calls()?.iter().all(|call| {
+        !matches!(
+            call,
+            TmuxCall::KillWindow { .. } | TmuxCall::KillSession { .. }
+        )
+    }));
+    assert!(
+        compensation
+            .outputs
+            .iter()
+            .any(|output| { output.message.contains("preserved failed tmux window") })
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn an_existing_session_with_unmanaged_windows_is_preserved() -> TestResult {
     let runner: Arc<dyn ProcessRunner> = Arc::new(FakeProcessRunner::default());
     let tmux = FakeTmux::default();
@@ -633,8 +704,61 @@ async fn tmux_adapter_parses_sessions_and_quotes_structured_commands() -> TestRe
         .get(1)
         .ok_or_else(|| std::io::Error::other("tmux create request was not recorded"))?;
     let command = create_request.arguments.last().cloned().unwrap_or_default();
+    assert!(command.contains("remain-on-exit failed"));
+    assert!(command.contains("exec"));
     assert!(command.contains("'GREETING'='hello world'"));
     assert!(command.contains("'dev server'"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn tmux_creation_reports_a_dead_window_without_waiting_for_the_full_timeout() -> TestResult {
+    let runner = FakeProcessRunner::with_responses([
+        ProcessOutput {
+            status: Some(0),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        },
+        ProcessOutput {
+            status: Some(0),
+            stdout:
+                b"session-0\tworkstate-personal-blog\t@0\tworkstate-api\tbun\tbun\t/tmp\t42\t1\n"
+                    .to_vec(),
+            stderr: Vec::new(),
+        },
+    ]);
+    let runner: Arc<dyn ProcessRunner> = Arc::new(runner);
+    let backend = TmuxProcessBackend::new(runner, PathBuf::from("/usr/bin/tmux"))?;
+    let result = backend
+        .create_session(
+            "workstate-personal-blog",
+            workstate::application::ports::TmuxWindowRequest {
+                name: "workstate-api".to_owned(),
+                process: workstate::application::ports::ProcessRequest {
+                    program: "bun".to_owned(),
+                    arguments: Vec::new(),
+                    working_directory: Some(PathBuf::from("/tmp")),
+                    environment: Vec::new(),
+                },
+            },
+        )
+        .await;
+    let error = match result {
+        Ok(_) => {
+            return Err(
+                std::io::Error::other("a dead tmux window unexpectedly became ready").into(),
+            );
+        }
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.message,
+        "the tmux command exited before startup completed"
+    );
+    assert_eq!(
+        error.context.get("inspect_command").map(String::as_str),
+        Some("tmux attach-session -t workstate-personal-blog")
+    );
     Ok(())
 }
 

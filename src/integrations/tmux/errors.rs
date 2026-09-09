@@ -83,3 +83,19 @@ pub(crate) fn readiness_timeout(session_name: &str, window_name: &str) -> Workst
     .with_context("session_name", session_name.to_owned())
     .with_context("window_name", window_name.to_owned())
 }
+
+pub(crate) fn window_exited_during_startup(
+    session_name: &str,
+    window_name: &str,
+) -> WorkstateError {
+    WorkstateError::new(
+        ErrorCategory::Integration,
+        "the tmux command exited before startup completed",
+    )
+    .with_context("session_name", session_name.to_owned())
+    .with_context("window_name", window_name.to_owned())
+    .with_context(
+        "inspect_command",
+        format!("tmux attach-session -t {session_name}"),
+    )
+}
