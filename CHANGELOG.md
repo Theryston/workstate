@@ -4,6 +4,12 @@ All notable changes to Workstate are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.6](https://github.com/Theryston/workstate/compare/v0.1.5...v0.1.6) - 2026-09-07
+
+### Fixed
+
+- *(release)* pass apt multilib options to libxkbcommon install
+
 ## [0.1.5](https://github.com/Theryston/workstate/compare/v0.1.4...v0.1.5) - 2026-09-07
 
 ### Added
